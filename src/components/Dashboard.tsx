@@ -18,81 +18,70 @@ import {
 } from 'recharts';
 
 declare const process: any;
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+const aiSDK = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-const cn = (...classes: any[]) => classes.filter(Boolean).join(' ');
-
-// AI Inferencing logic (Natively handled by AI Studio on frontend)
-const generateAIAnalysis = async (dataSample: any, symbol: string) => {
-    try {
-        const prompt = `
-        You are an elite quantitative technical analyst AI engine with an exhaustive knowledge of advanced charting.
-        I am providing you with the exact daily OHLCV candlestick data for the last 45 trading days for ${symbol}.
-        Identify recognized patterns (Macro Formations, Harmonic Patterns, Japanese Candlestick variations).
-        Data: ${JSON.stringify(dataSample)}
-        `;
-
-        const aiResponse = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        patterns: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    patternName: { type: Type.STRING },
-                                    confidence: { type: Type.NUMBER },
-                                    description: { type: Type.STRING },
-                                    trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] }
-                                }
-                            }
-                        },
-                        overallSummary: { type: Type.STRING }
+// Hybrid AI Logic: Prefer direct SDK in AI Studio Preview, fallback to Backend on Vercel
+const getAIAnalysis = async (dataSample: any, symbol: string) => {
+    // 1. Try Direct SDK (Fastest for Preview)
+    if (process.env.GEMINI_API_KEY) {
+        try {
+            const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
+            const response = await aiSDK.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            patterns: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { patternName: { type: Type.STRING }, confidence: { type: Type.NUMBER }, description: { type: Type.STRING }, trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] } } } },
+                            overallSummary: { type: Type.STRING }
+                        }
                     }
                 }
-            }
-        });
-        return JSON.parse(aiResponse.text || "{}");
-    } catch (err: any) {
-        console.error(err);
-        return { overallSummary: "AI Analysis unavailable. Check Gemini API key.", patterns: [] };
+            });
+            return JSON.parse(response.text || "{}");
+        } catch (e) { console.warn("Direct AI failed, falling back to backend..."); }
     }
+
+    // 2. Fallback to Backend (Required for Vercel)
+    const res = await fetch('/api/ai/analyze-patterns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataSample, symbol })
+    });
+    return await res.json();
 };
 
-const generateSentimentAnalysis = async (newsArr: any[], symbol: string) => {
-    try {
-        if (!newsArr || newsArr.length === 0) return { sentiment: "neutral", sentimentScore: 50, summary: "No recent news found." };
-        const prompt = `
-        Analyze the sentiment of the following financial news headlines for the stock symbol ${symbol}.
-        Score from 0 (neg) to 100 (pos).
-        News: ${JSON.stringify(newsArr)}
-        `;
-
-        const aiResponse = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
-                        sentimentScore: { type: Type.NUMBER },
-                        summary: { type: Type.STRING }
+const getSentimentAnalysis = async (newsArr: any[], symbol: string) => {
+    if (process.env.GEMINI_API_KEY) {
+        try {
+            const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
+            const response = await aiSDK.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
+                            sentimentScore: { type: Type.NUMBER },
+                            summary: { type: Type.STRING }
+                        }
                     }
                 }
-            }
-        });
-        return JSON.parse(aiResponse.text || "{}");
-    } catch(err) {
-        console.error(err);
-        return { sentiment: "neutral", sentimentScore: 50, summary: "Sentiment analysis unavailable." };
+            });
+            return JSON.parse(response.text || "{}");
+        } catch (e) { console.warn("Direct Sentiment failed, falling back to backend..."); }
     }
+
+    const res = await fetch('/api/ai/analyze-sentiment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newsArr, symbol })
+    });
+    return await res.json();
 };
 
 const CustomCandlestick = (props: any) => {
@@ -228,7 +217,7 @@ export default function Dashboard() {
         setPredictions(predictData); 
         
         // AI background processing
-        generateAIAnalysis(predictData.dataSampleForAI, symbol).then((aiData) => {
+        getAIAnalysis(predictData.dataSampleForAI, symbol).then((aiData) => {
             setPredictions((prev: any) => ({...prev, aiPatternAnalysis: aiData}));
         });
       }
@@ -238,7 +227,7 @@ export default function Dashboard() {
         .then(r => r.json())
         .then(async (newsData) => {
             setNewsData(newsData);
-            const sentimentData = await generateSentimentAnalysis(newsData.news, symbol);
+            const sentimentData = await getSentimentAnalysis(newsData.news, symbol);
             setNewsData((prev: any) => ({...prev, ...sentimentData}));
         })
         .catch(console.error);

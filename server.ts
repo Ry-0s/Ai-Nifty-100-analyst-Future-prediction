@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import YahooFinance from 'yahoo-finance2';
+import { GoogleGenAI, Type } from '@google/genai';
 import { linearRegression, linearRegressionLine } from 'simple-statistics';
 import { 
   RSI, MACD, SMA, stochastic, CCI, ADX, BollingerBands,
@@ -19,6 +20,58 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+
+  // AI Backend Routes
+  app.post('/api/ai/analyze-patterns', async (req, res) => {
+    try {
+      const { dataSample, symbol } = req.body;
+      const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
+      const aiResponse = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              patterns: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { patternName: { type: Type.STRING }, confidence: { type: Type.NUMBER }, description: { type: Type.STRING }, trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] } } } },
+              overallSummary: { type: Type.STRING }
+            }
+          }
+        }
+      });
+      res.json(JSON.parse(aiResponse.text || "{}"));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/ai/analyze-sentiment', async (req, res) => {
+    try {
+      const { newsArr, symbol } = req.body;
+      const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
+      const aiResponse = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
+              sentimentScore: { type: Type.NUMBER },
+              summary: { type: Type.STRING }
+            }
+          }
+        }
+      });
+      res.json(JSON.parse(aiResponse.text || "{}"));
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   // NIFTY 100 sample + Global valid symbols
   const SYMBOLS = [
@@ -259,10 +312,12 @@ async function startServer() {
             const momentumDrift = cciMomentum * bbBandwidth * 0.5 * trendStrengthMultiplier;
 
             // RNN/LSTM combination
-            cellState = (cellState * 0.8) + (momentumDrift + reversionPull + hiddenState + (rsiFactor * 0.05)) * 0.1;
-            const outputGate = Math.tanh(cellState) * 0.015; // Limit daily change to ~1.5% max for realism
+            cellState = (cellState * 0.85) + (momentumDrift + reversionPull + (hiddenState * 2) + (rsiFactor * 0.1)) * 0.15;
+            const outputGate = Math.tanh(cellState) * 0.04; // Limit daily change to ~4% max for realism
             
-            predictedClose = predictedClose * (1 + outputGate);
+            // Add slight brownian noise
+            const noise = (Math.random() - 0.5) * 0.005;
+            predictedClose = predictedClose * (1 + outputGate + noise);
 
             futurePoints.push({
                 date: fDate.toISOString(),

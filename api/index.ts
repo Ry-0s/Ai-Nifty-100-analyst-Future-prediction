@@ -1,5 +1,6 @@
 import express from 'express';
 import YahooFinance from 'yahoo-finance2';
+import { GoogleGenAI, Type } from '@google/genai';
 import { linearRegression, linearRegressionLine } from 'simple-statistics';
 import { 
   RSI, MACD, SMA, stochastic, CCI, ADX, BollingerBands,
@@ -12,8 +13,60 @@ import {
 
 const app = express();
 const yahooFinance = new YahooFinance();
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 app.use(express.json());
+
+// AI Backend Routes
+app.post('/api/ai/analyze-patterns', async (req, res) => {
+    try {
+        const { dataSample, symbol } = req.body;
+        const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
+        const aiResponse = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        patterns: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { patternName: { type: Type.STRING }, confidence: { type: Type.NUMBER }, description: { type: Type.STRING }, trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] } } } },
+                        overallSummary: { type: Type.STRING }
+                    }
+                }
+            }
+        });
+        res.json(JSON.parse(aiResponse.text || "{}"));
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/ai/analyze-sentiment', async (req, res) => {
+    try {
+        const { newsArr, symbol } = req.body;
+        if (!newsArr || newsArr.length === 0) return res.json({ sentiment: "neutral", sentimentScore: 50, summary: "No news." });
+        const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
+        const aiResponse = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
+                        sentimentScore: { type: Type.NUMBER },
+                        summary: { type: Type.STRING }
+                    }
+                }
+            }
+        });
+        res.json(JSON.parse(aiResponse.text || "{}"));
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 const SYMBOLS = [
   { symbol: '^NSEI', name: 'NIFTY 50 Index' },
@@ -133,30 +186,45 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
             if (hammerpattern(last5)) { quantScore += 15; detectedSignals.push({ name: 'Hammer Pattern', impact: 'bullish' }); }
             if (shootingstar(last5)) { quantScore -= 15; detectedSignals.push({ name: 'Shooting Star', impact: 'bearish' }); }
 
-            // AR-LSTM Emulation
-            const recentData = rawData.slice(-100);
-            const regression = linearRegression(recentData.map((d, i) => [i, d.close]));
+            // AR-LSTM Emulation (Enhanced for visible variance)
+            const recentDataFiltered = rawData.slice(-100).filter(d => d.close != null);
+            const dataForReg = recentDataFiltered.map((d, i) => [i, d.close]);
+            const regression = linearRegression(dataForReg);
             const baselineLine = linearRegressionLine(regression);
             
             const futurePoints = [];
-            let predictedClose = closes[closes.length - 1];
+            let lastPrice = closes[closes.length - 1];
+            let predictedClose = lastPrice;
             const adxValue = currentAdx ? currentAdx.adx : 25;
             const cciMomentum = currentCci ? Math.max(-1, Math.min(1, currentCci / 200)) : 0;
             const trendModifier = quantScore / 100;
 
-            let cellState = 0;
-            const trendStrengthMultiplier = Math.min(1, adxValue / 50);
+            // RNN Hidden Persistence
+            let cellState = trendModifier * 0.02; 
+            const trendStrength = Math.min(1, adxValue / 40);
 
             for (let i = 1; i <= 30; i++) {
-                const fDate = new Date(recentData[recentData.length - 1].date);
+                const fDate = new Date(recentDataFiltered[recentDataFiltered.length - 1].date);
                 fDate.setDate(fDate.getDate() + i);
-                const regMean = baselineLine(recentData.length - 1 + i);
-                const revPull = (regMean - predictedClose) / predictedClose * (1 - trendStrengthMultiplier) * 0.1;
-                const momDrift = cciMomentum * 0.01 * trendStrengthMultiplier;
+                
+                // Drift from regression slope vs Current Hidden State
+                const regSlopeDrift = (regression.m / predictedClose) * 0.8; 
+                const regMean = baselineLine(recentDataFiltered.length - 1 + i);
+                const meanReversion = (regMean - predictedClose) / predictedClose * (1 - trendStrength) * 0.15;
+                
+                // Momentum update
+                const bias = (trendModifier * 0.01) + (cciMomentum * 0.005) + regSlopeDrift;
+                cellState = (cellState * 0.85) + (bias + meanReversion) * 0.15;
+                
+                // Final calculation (Boosted for visibility)
+                const outputGate = Math.tanh(cellState) * 0.04; 
+                const noise = (Math.random() - 0.5) * 0.005;
+                predictedClose = predictedClose * (1 + outputGate + noise);
 
-                cellState = (cellState * 0.8) + (momDrift + revPull + (trendModifier * 0.01)) * 0.1;
-                predictedClose = predictedClose * (1 + Math.tanh(cellState) * 0.015);
-                futurePoints.push({ date: fDate.toISOString(), predictedClose: parseFloat(predictedClose.toFixed(2)) });
+                futurePoints.push({ 
+                    date: fDate.toISOString(), 
+                    predictedClose: parseFloat(predictedClose.toFixed(2)) 
+                });
             }
 
             res.json({
