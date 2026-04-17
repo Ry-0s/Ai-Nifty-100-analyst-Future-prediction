@@ -39,7 +39,7 @@ const handleAIError = (e: any, context: string) => {
         globalLockUntil = Date.now() + 65000;
         return { 
             error: "Quota Exceeded", 
-            message: "The Gemini Pro free tier has a limit of 15 requests per minute. Please wait 60 seconds for the next structural analysis.",
+            message: "The Gemini Pro free tier has a limit of 15 requests per minute. Pattern discovery and sentiment parsing are paused for 60 seconds to avoid further rate limiting.",
             type: 'quota'
         };
     }
@@ -67,15 +67,26 @@ const handleAIError = (e: any, context: string) => {
     };
 };
 
-const ErrorDisplay = ({ err }: { err: any }) => (
-    <div className="p-4 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg flex flex-col gap-2">
-        <div className="flex items-center gap-2 text-red-500 font-bold text-sm">
+const ErrorDisplay = ({ err, retry }: { err: any, retry?: () => void }) => (
+    <div className="p-4 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg flex flex-col gap-2 transition-all animate-in fade-in zoom-in-95">
+        <div className="flex items-center gap-2 text-amber-500 dark:text-amber-400 font-bold text-sm">
             <AlertCircle className="w-4 h-4" />
             {err.error || "Analysis Error"}
         </div>
         <p className="text-xs text-zinc-500 leading-relaxed">{err.message || "Something went wrong while processing the AI signals."}</p>
-        <div className="flex justify-end pt-1">
-            <button onClick={() => window.location.reload()} className="text-[10px] font-bold text-blue-500 hover:underline uppercase tracking-widest">Re-attempt Sync</button>
+        <div className="flex justify-end pt-1 gap-3">
+            {retry && (
+                <button 
+                  onClick={retry} 
+                  className="text-[10px] font-bold text-blue-500 hover:text-blue-600 transition-colors uppercase tracking-widest flex items-center gap-1"
+                >
+                    <RefreshCcw className="w-3 h-3" />
+                    Retry Analysis
+                </button>
+            )}
+            {!retry && (
+                <button onClick={() => window.location.reload()} className="text-[10px] font-bold text-zinc-400 hover:text-zinc-500 uppercase tracking-widest">Re-attempt Sync</button>
+            )}
         </div>
     </div>
 );
@@ -306,17 +317,25 @@ const AIAnalysisBlock = React.memo(({ predictions, symbol }: any) => {
   const [analysis, setAnalysis] = useState<any>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
 
-  useEffect(() => {
+  const fetchAnalysis = useCallback(async () => {
     if (predictions && predictions.dataSampleForAI) {
       setAnalysisLoading(true);
-      getAIAnalysis(predictions.dataSampleForAI, symbol)
-        .then(res => setAnalysis(res))
-        .finally(() => setAnalysisLoading(false));
+      setAnalysis(null);
+      try {
+        const res = await getAIAnalysis(predictions.dataSampleForAI, symbol);
+        setAnalysis(res);
+      } finally {
+        setAnalysisLoading(false);
+      }
     }
   }, [predictions, symbol]);
 
+  useEffect(() => {
+    fetchAnalysis();
+  }, [fetchAnalysis]);
+
   if (!predictions) return <div className="h-40 flex items-center justify-center animate-pulse text-zinc-400 text-sm">Model is analyzing latest sequences...</div>;
-  if (analysis?.error) return <ErrorDisplay err={analysis} />;
+  if (analysis?.error) return <ErrorDisplay err={analysis} retry={fetchAnalysis} />;
   
   return (
     <div className="space-y-6">
@@ -403,14 +422,22 @@ const NewsSentimentBlock = React.memo(({ newsData, symbol }: any) => {
   const [sentiment, setSentiment] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  const fetchSentiment = useCallback(async () => {
     if (newsData && newsData.news && newsData.news.length > 0) {
       setLoading(true);
-      getSentimentAnalysis(newsData.news, symbol)
-        .then(res => setSentiment(res))
-        .finally(() => setLoading(false));
+      setSentiment(null);
+      try {
+        const res = await getSentimentAnalysis(newsData.news, symbol);
+        setSentiment(res);
+      } finally {
+        setLoading(false);
+      }
     }
   }, [newsData, symbol]);
+
+  useEffect(() => {
+    fetchSentiment();
+  }, [fetchSentiment]);
 
   if (!newsData || !newsData.news || newsData.news.length === 0) {
     return (
@@ -421,7 +448,7 @@ const NewsSentimentBlock = React.memo(({ newsData, symbol }: any) => {
     );
   }
 
-  if (sentiment?.error) return <ErrorDisplay err={sentiment} />;
+  if (sentiment?.error) return <ErrorDisplay err={sentiment} retry={fetchSentiment} />;
   
   const displayData = sentiment || newsData; // Fallback to raw data if AI fails gracefully but didn't return error object
   
@@ -568,20 +595,8 @@ export default function Dashboard() {
         predictions: pDataRaw
       });
       
-      // Secondary background update for AI Analysis (doesn't change length of combinedData immediately)
-      if (pDataRaw) {
-        getAIAnalysis(pDataRaw.dataSampleForAI, symbol).then((aiData) => {
-          setChartSource(prev => ({
-            ...prev,
-            predictions: prev.predictions ? { ...prev.predictions, aiPatternAnalysis: aiData } : null
-          }));
-        });
-      }
-
       fetch(`/api/news/${symbol}`).then(r => r.json()).then(async (nData) => {
           setNewsData(nData);
-          const sentimentData = await getSentimentAnalysis(nData.news, symbol);
-          setNewsData((prev: any) => ({...prev, ...sentimentData}));
       }).catch(console.error);
       
     } catch(err: any) { setError(err.message); } finally { 

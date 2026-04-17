@@ -263,20 +263,34 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
                 }
             } catch(e) { console.warn("Correlation fetch failed:", e); }
 
+            // Evaluate sub-models over backtest window (Time-Decayed Weights)
             let trendError = 0;
             let meanRevError = 0;
+            let totalDecayWeight = 0;
             const testWindow = 15;
-            for (let i = prices.length - testWindow; i < prices.length; i++) {
-                const actual = prices[i];
-                const tPred = level + (trend * (i - (prices.length - 1)));
-                const mPred = regression.b + (regression.m * i);
-                trendError += Math.abs(actual - tPred) / actual;
-                meanRevError += Math.abs(actual - mPred) / actual;
+            for (let i = 0; i < testWindow; i++) {
+                const idx = prices.length - testWindow + i;
+                const actual = prices[idx];
+                
+                // Linear decay: more recent observations have higher weight
+                const decay = (i + 1) / testWindow; 
+                
+                const tPred = level + (trend * (idx - (prices.length - 1)));
+                const mPred = regression.b + (regression.m * idx);
+                
+                trendError += (Math.abs(actual - tPred) / actual) * decay;
+                meanRevError += (Math.abs(actual - mPred) / actual) * decay;
+                totalDecayWeight += decay;
             }
             
-            const temp = 0.05;
-            const eTrend = Math.exp(-trendError / temp);
-            const eMean = Math.exp(-meanRevError / temp);
+            // Normalize errors by total decay weight
+            const normTrendError = trendError / totalDecayWeight;
+            const normMeanRevError = meanRevError / totalDecayWeight;
+            
+            // Elastic Softmax Weighting
+            const temp = 0.04; 
+            const eTrend = Math.exp(-normTrendError / temp);
+            const eMean = Math.exp(-normMeanRevError / temp);
             let finalTrendWeight = eTrend / (eTrend + eMean);
             let finalMeanRevWeight = eMean / (eTrend + eMean);
 
@@ -296,6 +310,8 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
 
             const futurePoints = [];
             let predictedClose = prices[prices.length - 1];
+            const initialClose = prices[prices.length - 1];
+            const historicalMean = prices.reduce((a, b) => a + b, 0) / prices.length;
             const regimeBias = quantScore / 100;
 
             for (let i = 1; i <= 60; i++) {
@@ -303,23 +319,45 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
                 fDate.setDate(fDate.getDate() + i);
                 const dayOfWeek = fDate.getDay();
                 
-                const structuralDrift = (trend / predictedClose) * 0.45 * finalTrendWeight;
+                // 1. Ensemble Consensus Drift with Horizon Damping (Adaptive)
+                const volatilityPenalty = Math.max(0, (volatilityScaler - 0.01) * 5); 
+                const adaptiveDampingBase = Math.min(0.98, 0.97 - volatilityPenalty);
+                const horizonDamping = Math.pow(adaptiveDampingBase, i);
+                
+                const driftStrength = 0.35 + (marketCorrelation * 0.15); 
+                const structuralDrift = (trend / predictedClose) * driftStrength * finalTrendWeight * horizonDamping;
+                
+                // 2. Adaptive Mean Reversion (Gravity Anchor)
                 const regTarget = (regression.b + regression.m * (recentDataFiltered.length - 1 + i));
-                const meanReversion = (regTarget - predictedClose) / predictedClose * 0.15 * finalMeanRevWeight;
-                const seasonalDrift = weekdayExpectancy[dayOfWeek] * 0.45;
-                const biasDecay = Math.exp(-i / 25); 
-                const biasForce = regimeBias * 0.015 * biasDecay;
+                const deviationFromAnchor = (regTarget - predictedClose) / predictedClose;
                 
+                const gravityStrength = 0.05 + (Math.max(0, 0.03 - volatilityScaler) * 2);
+                const gravityPull = (historicalMean - predictedClose) / predictedClose * gravityStrength * (i / 60);
+                const meanReversionForce = (deviationFromAnchor * 0.2 + gravityPull) * finalMeanRevWeight;
+                
+                // 3. Seasonality & Regime Damping
+                const seasonalDrift = weekdayExpectancy[dayOfWeek] * 0.3 * horizonDamping;
+                const biasDecay = Math.exp(-i / (15 + (1 - marketCorrelation) * 10)); 
+                const biasForce = regimeBias * 0.012 * biasDecay;
+                
+                // 4. Entropy / Volatility Expansion
                 const stochRsiHeat = currentStochRsi ? (currentStochRsi.stochRSI / 100) : 0.5;
-                const variance = volatilityScaler * (1 + (stochRsiHeat * 0.4)) * Math.sqrt(i) * 0.12;
+                const variance = volatilityScaler * (1 + (stochRsiHeat * 0.25)) * Math.sqrt(i) * 0.09;
 
-                const alignmentBonus = (Math.sign(structuralDrift) === Math.sign(biasForce)) ? 1.25 : 0.75;
-                const netDrift = (structuralDrift + meanReversion + biasForce + seasonalDrift) * alignmentBonus;
-                const cappedDrift = Math.tanh(netDrift * 15) / 15;
+                // 5. Net Drift Calculation with Saturation
+                const alignmentBonus = (Math.sign(structuralDrift) === Math.sign(biasForce)) ? 1.15 : 0.85;
+                const netDrift = (structuralDrift + meanReversionForce + biasForce + seasonalDrift) * alignmentBonus;
+                const saturatedDrift = Math.tanh(netDrift * 20) / 20; 
                 const noise = (Math.random() - 0.5) * variance;
-                const change = Math.max(-0.05, Math.min(0.05, cappedDrift + noise));
                 
-                predictedClose = predictedClose * (1 + change);
+                // Final Change
+                const totalChange = Math.max(-0.055, Math.min(0.055, saturatedDrift + noise));
+                
+                // 6. Cumulative Saturation
+                const cumulativeReturn = (predictedClose * (1 + totalChange)) / initialClose - 1;
+                const saturationPressure = Math.abs(cumulativeReturn) > 0.25 ? -Math.sign(cumulativeReturn) * (Math.abs(cumulativeReturn) - 0.25) * 0.5 : 0;
+                
+                predictedClose = predictedClose * (1 + totalChange + saturationPressure);
 
                 futurePoints.push({ 
                     date: fDate.toISOString(), 
