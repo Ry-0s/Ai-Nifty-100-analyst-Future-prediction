@@ -1,0 +1,6 @@
+{
+  "name": "NIFTY 100 AI Analyzer",
+  "description": "AI-powered stock analysis dashboard for NIFTY 100 using Yahoo Finance, featuring candlestick charts, predictive ML models, and real-time news sentiment analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
