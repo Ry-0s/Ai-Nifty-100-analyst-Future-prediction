@@ -1,99 +1,17 @@
 import express from 'express';
 import YahooFinance from 'yahoo-finance2';
-import { GoogleGenAI, Type } from '@google/genai';
 import { linearRegression, linearRegressionLine } from 'simple-statistics';
 import { 
   RSI, MACD, SMA, stochastic, CCI, ADX, BollingerBands,
-  bullishengulfingpattern, bearishengulfingpattern, doji, morningstar, eveningstar, 
-  hammerpattern, bearishharami, bullishharami, piercingline, darkcloudcover, shootingstar,
-  abandonedbaby, downsidetasukigap, dragonflydoji, gravestonedoji, bullishharamicross, bearishharamicross,
-  eveningdojistar, morningdojistar, bullishmarubozu, bearishmarubozu, bullishspinningtop, bearishspinningtop,
-  threeblackcrows, threewhitesoldiers, tweezertop, tweezerbottom
+  bullishengulfingpattern, bearishengulfingpattern, morningstar, eveningstar,
+  threeblackcrows, threewhitesoldiers, IchimokuCloud, StochasticRSI,
+  hammerpattern, shootingstar
 } from 'technicalindicators';
 
 const app = express();
 const yahooFinance = new YahooFinance();
 
-// Lazy initialize AI client to handle missing keys gracefully on Vercel
-let aiClient: any = null;
-const getAIClient = () => {
-    if (!aiClient) {
-        const key = process.env.GEMINI_API_KEY;
-        if (!key) {
-            throw new Error("GEMINI_API_KEY environment variable is not set. Please add it to your Vercel project settings.");
-        }
-        aiClient = new GoogleGenAI({ apiKey: key });
-    }
-    return aiClient;
-};
-
 app.use(express.json());
-
-// Clean JSON output from AI
-const cleanAIJSON = (text: string) => {
-    try {
-        const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        return JSON.parse(cleaned);
-    } catch (e) {
-        console.error("AI JSON Parse Error:", e, text);
-        return { error: "Failed to parse AI response as JSON", raw: text };
-    }
-};
-
-// AI Backend Routes
-app.post('/api/ai/analyze-patterns', async (req, res) => {
-    try {
-        const ai = getAIClient();
-        const { dataSample, symbol } = req.body;
-        const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
-        const aiResponse = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        patterns: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { patternName: { type: Type.STRING }, confidence: { type: Type.NUMBER }, description: { type: Type.STRING }, trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] } } } },
-                        overallSummary: { type: Type.STRING }
-                    }
-                }
-            }
-        });
-        res.json(cleanAIJSON(aiResponse.text || "{}"));
-    } catch (e: any) {
-        console.error("AI Analyze Patterns Error:", e.message);
-        res.status(500).json({ error: e.message, status: "AI_ERROR" });
-    }
-});
-
-app.post('/api/ai/analyze-sentiment', async (req, res) => {
-    try {
-        const ai = getAIClient();
-        const { newsArr, symbol } = req.body;
-        if (!newsArr || newsArr.length === 0) return res.json({ sentiment: "neutral", sentimentScore: 50, summary: "No news." });
-        const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
-        const aiResponse = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
-                        sentimentScore: { type: Type.NUMBER },
-                        summary: { type: Type.STRING }
-                    }
-                }
-            }
-        });
-        res.json(cleanAIJSON(aiResponse.text || "{}"));
-    } catch (e: any) {
-        console.error("AI Sentiment Error:", e.message);
-        res.status(500).json({ error: e.message, status: "AI_ERROR" });
-    }
-});
 
 const SYMBOLS = [
   { symbol: '^NSEI', name: 'NIFTY 50 Index' },
@@ -106,8 +24,19 @@ const SYMBOLS = [
   { symbol: 'BHARTIARTL.NS', name: 'Bharti Airtel' },
   { symbol: 'ITC.NS', name: 'ITC Limited' },
   { symbol: 'LT.NS', name: 'Larsen & Toubro' },
+  { symbol: 'ADANIENT.NS', name: 'Adani Enterprises' },
+  { symbol: 'BAJFINANCE.NS', name: 'Bajaj Finance' },
+  { symbol: 'COALINDIA.NS', name: 'Coal India' },
+  { symbol: 'SUNPHARMA.NS', name: 'Sun Pharma' },
+  { symbol: 'TATAMOTORS.NS', name: 'Tata Motors' },
+  { symbol: 'HINDUNILVR.NS', name: 'Hindustan Unilever' },
+  { symbol: 'AXISBANK.NS', name: 'Axis Bank' },
+  { symbol: 'ADANIPORTS.NS', name: 'Adani Ports' },
+  { symbol: 'ASIANPAINT.NS', name: 'Asian Paints' },
+  { symbol: 'KOTAKBANK.NS', name: 'Kotak Mahindra Bank' },
   { symbol: 'AAPL', name: 'Apple Inc.' },
   { symbol: 'TSLA', name: 'Tesla Inc.' },
+  { symbol: 'NVDA', name: 'Nvidia Corp.' },
 ];
 
 const calculateSMA = (data: number[], window: number) => {
@@ -157,10 +86,38 @@ app.get('/api/history/:symbol', async (req, res) => {
         const results: any[] = (chartData.quotes || []).filter((q: any) => q.close != null && q.open != null && q.high != null && q.low != null);
         
         const closes = results.map(r => r.close);
+        const highs = results.map(r => r.high);
+        const lows = results.map(r => r.low);
+        
         const sma20 = calculateSMA(closes, 20);
         const sma50 = calculateSMA(closes, 50);
 
-        res.json(results.map((r, i) => ({ ...r, sma20: sma20[i], sma50: sma50[i] })));
+        const ichimoku = IchimokuCloud.calculate({
+            high: highs, low: lows,
+            conversionPeriod: 9, basePeriod: 26, spanPeriod: 52, displacement: 26
+        });
+
+        const stochRsi = StochasticRSI.calculate({
+            values: closes, rsiPeriod: 14, stochasticPeriod: 14, kPeriod: 3, dPeriod: 3
+        });
+
+        const bb = BollingerBands.calculate({
+            values: closes, period: 20, stdDev: 2
+        });
+
+        res.json(results.map((r, i) => {
+            const ichiOffset = results.length - ichimoku.length;
+            const stochOffset = results.length - stochRsi.length;
+            const bbOffset = results.length - bb.length;
+            return { 
+                ...r, 
+                sma20: sma20[i], 
+                sma50: sma50[i],
+                ichimoku: i >= ichiOffset ? ichimoku[i - ichiOffset] : null,
+                stochRsi: i >= stochOffset ? stochRsi[i - stochOffset] : null,
+                bollinger: i >= bbOffset ? bb[i - bbOffset] : null
+            };
+        }));
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -185,6 +142,9 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
         let quantScore = 0;
         let detectedSignals: any[] = [];
         
+        let currentIchimoku: any = null;
+        let currentStochRsi: any = null;
+        
         try {
             const rsi = RSI.calculate({ values: closes, period: 14 });
             const macd = MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
@@ -192,6 +152,13 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
             const bb = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
             const cci = CCI.calculate({ high: highs, low: lows, close: closes, period: 20 });
             const adx = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
+            const ichimoku = IchimokuCloud.calculate({
+                high: highs, low: lows,
+                conversionPeriod: 9, basePeriod: 26, spanPeriod: 52, displacement: 26
+            });
+            const stochRsi = StochasticRSI.calculate({
+                values: closes, rsiPeriod: 14, stochasticPeriod: 14, kPeriod: 3, dPeriod: 3
+            });
             
             const currentRsi = rsi[rsi.length - 1];
             const currentMacd = macd[macd.length - 1];
@@ -199,10 +166,20 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
             const currentBB = bb[bb.length - 1];
             const currentCci = cci[cci.length - 1];
             const currentAdx = adx[adx.length - 1];
+            currentIchimoku = ichimoku[ichimoku.length - 1];
+            currentStochRsi = stochRsi[stochRsi.length - 1];
             const currentClose = closes[closes.length - 1];
 
             if (currentRsi < 30) { quantScore += 20; detectedSignals.push({ name: 'RSI Bullish', impact: 'bullish' }); }
             else if (currentRsi > 70) { quantScore -= 20; detectedSignals.push({ name: 'RSI Overbought', impact: 'bearish' }); }
+
+            // Ichimoku Regime
+            if (currentIchimoku) {
+                const cloudTop = Math.max(currentIchimoku.spanA, currentIchimoku.spanB);
+                const cloudBottom = Math.min(currentIchimoku.spanA, currentIchimoku.spanB);
+                if (currentClose > cloudTop) quantScore += 30;
+                else if (currentClose < cloudBottom) quantScore -= 30;
+            }
 
             if (currentMacd && currentMacd.MACD > currentMacd.signal) { quantScore += 15; detectedSignals.push({ name: 'MACD Bullish', impact: 'bullish' }); }
             else { quantScore -= 15; detectedSignals.push({ name: 'MACD Bearish', impact: 'bearish' }); }
@@ -213,40 +190,136 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
             if (hammerpattern(last5)) { quantScore += 15; detectedSignals.push({ name: 'Hammer Pattern', impact: 'bullish' }); }
             if (shootingstar(last5)) { quantScore -= 15; detectedSignals.push({ name: 'Shooting Star', impact: 'bearish' }); }
 
-            // AR-LSTM Emulation (Enhanced for visible variance)
-            const recentDataFiltered = rawData.slice(-100).filter(d => d.close != null);
+            // Ensemble AR-I-MA-Prophet Engine (60-Day Horizon)
+            const recentDataFiltered = rawData.slice(-120).filter(d => d.close != null);
+            const prices = recentDataFiltered.map(d => d.close);
+
+            // Integrated (I) - Differencing
+            const dailyAverages = new Array(7).fill(0);
+            const dailyCounts = new Array(7).fill(0);
+            recentDataFiltered.forEach((d, i) => {
+                if (i > 0) {
+                    const day = new Date(d.date).getDay();
+                    const ret = Math.log(d.close / recentDataFiltered[i-1].close);
+                    dailyAverages[day] += ret;
+                    dailyCounts[day]++;
+                }
+            });
+            const weekdayExpectancy = dailyAverages.map((val, i) => dailyCounts[i] > 0 ? val / dailyCounts[i] : 0);
+
+            // Holt-Winters level/trend
+            let level = prices[0];
+            let trend = prices[1] - prices[0];
+            const alpha = 0.25, beta = 0.15; 
+            for(let i = 1; i < prices.length; i++) {
+                const lastLevel = level;
+                level = alpha * prices[i] + (1 - alpha) * (level + trend);
+                trend = beta * (level - lastLevel) + (1 - beta) * trend;
+            }
+
             const dataForReg = recentDataFiltered.map((d, i) => [i, d.close]);
             const regression = linearRegression(dataForReg);
-            const baselineLine = linearRegressionLine(regression);
             
+            // 4. Advanced Ensemble Meta-Learner (Elastic Softmax + Market Correlation)
+            let marketVolatility = 0.015;
+            let marketCorrelation = 0.5;
+            const logReturns = [];
+            for(let k = 1; k < prices.length; k++) logReturns.push(Math.log(prices[k] / prices[k-1]));
+            const recentVolatility = Math.sqrt(logReturns.slice(-30).reduce((sq, n) => sq + Math.pow(n, 2), 0) / 30 || 0.0001);
+
+            try {
+                const p1 = new Date();
+                p1.setMonth(p1.getMonth() - 3);
+                const marketData = await yahooFinance.chart('^NSEI', { interval: '1d', period1: p1.toISOString() });
+                const mQuotes = marketData.quotes.filter((q: any) => q.close != null);
+                if (mQuotes.length > 20) {
+                    const mReturns = [];
+                    const sReturns = [];
+                    const lookback = Math.min(mQuotes.length, prices.length) - 1;
+                    
+                    for(let j = 1; j <= 30 && j <= lookback; j++) {
+                        const sPrev = prices[prices.length - 1 - j];
+                        const sCurr = prices[prices.length - j];
+                        const mPrev = mQuotes[mQuotes.length - 1 - j].close;
+                        const mCurr = mQuotes[mQuotes.length - j].close;
+                        sReturns.push(Math.log(sCurr / sPrev));
+                        mReturns.push(Math.log(mCurr / mPrev));
+                    }
+
+                    const mMean = mReturns.reduce((a, b) => a + b, 0) / mReturns.length;
+                    const mVar = mReturns.reduce((sq, n) => sq + Math.pow(n - mMean, 2), 0) / mReturns.length;
+                    marketVolatility = Math.sqrt(mVar);
+
+                    const sMean = sReturns.reduce((a, b) => a + b, 0) / sReturns.length;
+                    let num = 0, denS = 0, denM = 0;
+                    for(let k = 0; k < sReturns.length; k++) {
+                        const ds = sReturns[k] - sMean;
+                        const dm = mReturns[k] - mMean;
+                        num += ds * dm;
+                        denS += ds * ds;
+                        denM += dm * dm;
+                    }
+                    marketCorrelation = Math.abs(num / Math.sqrt(denS * denM)) || 0.5;
+                }
+            } catch(e) { console.warn("Correlation fetch failed:", e); }
+
+            let trendError = 0;
+            let meanRevError = 0;
+            const testWindow = 15;
+            for (let i = prices.length - testWindow; i < prices.length; i++) {
+                const actual = prices[i];
+                const tPred = level + (trend * (i - (prices.length - 1)));
+                const mPred = regression.b + (regression.m * i);
+                trendError += Math.abs(actual - tPred) / actual;
+                meanRevError += Math.abs(actual - mPred) / actual;
+            }
+            
+            const temp = 0.05;
+            const eTrend = Math.exp(-trendError / temp);
+            const eMean = Math.exp(-meanRevError / temp);
+            let finalTrendWeight = eTrend / (eTrend + eMean);
+            let finalMeanRevWeight = eMean / (eTrend + eMean);
+
+            if (currentAdx && currentAdx.adx > 30) {
+                finalTrendWeight = Math.min(0.9, finalTrendWeight * 1.5);
+                finalMeanRevWeight = 1 - finalTrendWeight;
+            } else if (currentAdx && currentAdx.adx < 18) {
+                finalMeanRevWeight = Math.min(0.9, finalMeanRevWeight * 1.5);
+                finalTrendWeight = 1 - finalMeanRevWeight;
+            }
+
+            const systemicRisk = marketVolatility * marketCorrelation;
+            const idiosyncraticRisk = recentVolatility * (1 - marketCorrelation);
+            const bbBandwidth = currentBB ? (currentBB.upper - currentBB.lower) / currentBB.middle : 0.05;
+            const combinedVolatility = (idiosyncraticRisk * 0.7) + (systemicRisk * 0.3) + (bbBandwidth * 0.05); 
+            const volatilityScaler = Math.max(0.008, combinedVolatility);
+
             const futurePoints = [];
-            let lastPrice = closes[closes.length - 1];
-            let predictedClose = lastPrice;
-            const adxValue = currentAdx ? currentAdx.adx : 25;
-            const cciMomentum = currentCci ? Math.max(-1, Math.min(1, currentCci / 200)) : 0;
-            const trendModifier = quantScore / 100;
+            let predictedClose = prices[prices.length - 1];
+            const regimeBias = quantScore / 100;
 
-            // RNN Hidden Persistence
-            let cellState = trendModifier * 0.02; 
-            const trendStrength = Math.min(1, adxValue / 40);
-
-            for (let i = 1; i <= 30; i++) {
+            for (let i = 1; i <= 60; i++) {
                 const fDate = new Date(recentDataFiltered[recentDataFiltered.length - 1].date);
                 fDate.setDate(fDate.getDate() + i);
+                const dayOfWeek = fDate.getDay();
                 
-                // Drift from regression slope vs Current Hidden State
-                const regSlopeDrift = (regression.m / predictedClose) * 0.8; 
-                const regMean = baselineLine(recentDataFiltered.length - 1 + i);
-                const meanReversion = (regMean - predictedClose) / predictedClose * (1 - trendStrength) * 0.15;
+                const structuralDrift = (trend / predictedClose) * 0.45 * finalTrendWeight;
+                const regTarget = (regression.b + regression.m * (recentDataFiltered.length - 1 + i));
+                const meanReversion = (regTarget - predictedClose) / predictedClose * 0.15 * finalMeanRevWeight;
+                const seasonalDrift = weekdayExpectancy[dayOfWeek] * 0.45;
+                const biasDecay = Math.exp(-i / 25); 
+                const biasForce = regimeBias * 0.015 * biasDecay;
                 
-                // Momentum update
-                const bias = (trendModifier * 0.01) + (cciMomentum * 0.005) + regSlopeDrift;
-                cellState = (cellState * 0.85) + (bias + meanReversion) * 0.15;
+                const stochRsiHeat = currentStochRsi ? (currentStochRsi.stochRSI / 100) : 0.5;
+                const variance = volatilityScaler * (1 + (stochRsiHeat * 0.4)) * Math.sqrt(i) * 0.12;
+
+                const alignmentBonus = (Math.sign(structuralDrift) === Math.sign(biasForce)) ? 1.25 : 0.75;
+                const netDrift = (structuralDrift + meanReversion + biasForce + seasonalDrift) * alignmentBonus;
+                const cappedDrift = Math.tanh(netDrift * 15) / 15;
+                const noise = (Math.random() - 0.5) * variance;
+                const change = Math.max(-0.05, Math.min(0.05, cappedDrift + noise));
                 
-                // Final calculation (Boosted for visibility)
-                const outputGate = Math.tanh(cellState) * 0.04; 
-                const noise = (Math.random() - 0.5) * 0.005;
-                predictedClose = predictedClose * (1 + outputGate + noise);
+                predictedClose = predictedClose * (1 + change);
 
                 futurePoints.push({ 
                     date: fDate.toISOString(), 

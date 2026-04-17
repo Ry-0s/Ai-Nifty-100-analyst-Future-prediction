@@ -2,15 +2,11 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import YahooFinance from 'yahoo-finance2';
-import { GoogleGenAI, Type } from '@google/genai';
 import { linearRegression, linearRegressionLine } from 'simple-statistics';
 import { 
   RSI, MACD, SMA, stochastic, CCI, ADX, BollingerBands,
-  bullishengulfingpattern, bearishengulfingpattern, doji, morningstar, eveningstar, 
-  hammerpattern, bearishharami, bullishharami, piercingline, darkcloudcover, shootingstar,
-  abandonedbaby, downsidetasukigap, dragonflydoji, gravestonedoji, bullishharamicross, bearishharamicross,
-  eveningdojistar, morningdojistar, bullishmarubozu, bearishmarubozu, bullishspinningtop, bearishspinningtop,
-  threeblackcrows, threewhitesoldiers, tweezertop, tweezerbottom
+  bullishengulfingpattern, bearishengulfingpattern, morningstar, eveningstar,
+  threeblackcrows, threewhitesoldiers, IchimokuCloud, StochasticRSI
 } from 'technicalindicators';
 
 const yahooFinance = new YahooFinance();
@@ -20,82 +16,6 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-
-// Lazy initialize AI client
-let aiClient: any = null;
-const getAIClient = () => {
-    if (!aiClient) {
-        const key = process.env.GEMINI_API_KEY;
-        if (!key) throw new Error("GEMINI_API_KEY missing");
-        aiClient = new GoogleGenAI({ apiKey: key });
-    }
-    return aiClient;
-};
-
-// Clean JSON output from AI
-const cleanAIJSON = (text: string) => {
-  try {
-    const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    console.error("AI JSON Parse Error:", e, text);
-    return { error: "Failed to parse AI response", raw: text };
-  }
-};
-
-// AI Backend Routes
-app.post('/api/ai/analyze-patterns', async (req, res) => {
-  try {
-    const ai = getAIClient();
-    const { dataSample, symbol } = req.body;
-    const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
-    const aiResponse = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            patterns: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { patternName: { type: Type.STRING }, confidence: { type: Type.NUMBER }, description: { type: Type.STRING }, trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] } } } },
-            overallSummary: { type: Type.STRING }
-          }
-        }
-      }
-    });
-    res.json(cleanAIJSON(aiResponse.text || "{}"));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/ai/analyze-sentiment', async (req, res) => {
-  try {
-    const ai = getAIClient();
-    const { newsArr, symbol } = req.body;
-    const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
-    const aiResponse = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
-            sentimentScore: { type: Type.NUMBER },
-            summary: { type: Type.STRING }
-          }
-        }
-      }
-    });
-    res.json(cleanAIJSON(aiResponse.text || "{}"));
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
   // NIFTY 100 sample + Global valid symbols
   const SYMBOLS = [
@@ -109,8 +29,19 @@ app.post('/api/ai/analyze-sentiment', async (req, res) => {
     { symbol: 'BHARTIARTL.NS', name: 'Bharti Airtel' },
     { symbol: 'ITC.NS', name: 'ITC Limited' },
     { symbol: 'LT.NS', name: 'Larsen & Toubro' },
-    { symbol: 'AAPL', name: 'Apple Inc. (Global test)' },
-    { symbol: 'TSLA', name: 'Tesla Inc. (Global test)' },
+    { symbol: 'ADANIENT.NS', name: 'Adani Enterprises' },
+    { symbol: 'BAJFINANCE.NS', name: 'Bajaj Finance' },
+    { symbol: 'COALINDIA.NS', name: 'Coal India' },
+    { symbol: 'SUNPHARMA.NS', name: 'Sun Pharma' },
+    { symbol: 'TATAMOTORS.NS', name: 'Tata Motors' },
+    { symbol: 'HINDUNILVR.NS', name: 'Hindustan Unilever' },
+    { symbol: 'AXISBANK.NS', name: 'Axis Bank' },
+    { symbol: 'ADANIPORTS.NS', name: 'Adani Ports' },
+    { symbol: 'ASIANPAINT.NS', name: 'Asian Paints' },
+    { symbol: 'KOTAKBANK.NS', name: 'Kotak Mahindra Bank' },
+    { symbol: 'AAPL', name: 'Apple Inc.' },
+    { symbol: 'TSLA', name: 'Tesla Inc.' },
+    { symbol: 'NVDA', name: 'Nvidia Corp.' },
   ];
 
   app.get('/api/stocks', (req, res) => {
@@ -167,16 +98,42 @@ app.post('/api/ai/analyze-sentiment', async (req, res) => {
       const chartData: any = await yahooFinance.chart(symbol, queryOptions);
       const results: any[] = (chartData.quotes || []).filter((q: any) => q.close != null && q.open != null && q.high != null && q.low != null);
       
-      // Compute Indicators (SMA20, SMA50)
+      // Compute Indicators (SMA20, SMA50, Ichimoku, StochRSI)
       const closes = results.map(r => r.close);
+      const highs = results.map(r => r.high);
+      const lows = results.map(r => r.low);
+      
       const sma20 = calculateSMA(closes, 20);
       const sma50 = calculateSMA(closes, 50);
 
-      const enhancedResults = results.map((r, i) => ({
-        ...r,
-        sma20: sma20[i],
-        sma50: sma50[i]
-      }));
+      const ichimoku = IchimokuCloud.calculate({
+          high: highs, low: lows,
+          conversionPeriod: 9, basePeriod: 26, spanPeriod: 52, displacement: 26
+      });
+
+      const stochRsi = StochasticRSI.calculate({
+          values: closes, rsiPeriod: 14, stochasticPeriod: 14, kPeriod: 3, dPeriod: 3
+      });
+
+      const bb = BollingerBands.calculate({
+          values: closes, period: 20, stdDev: 2
+      });
+
+      const enhancedResults = results.map((r, i) => {
+        // Pad Indicators
+        const ichiOffset = results.length - ichimoku.length;
+        const stochOffset = results.length - stochRsi.length;
+        const bbOffset = results.length - bb.length;
+        
+        return {
+          ...r,
+          sma20: sma20[i],
+          sma50: sma50[i],
+          ichimoku: i >= ichiOffset ? ichimoku[i - ichiOffset] : null,
+          stochRsi: i >= stochOffset ? stochRsi[i - stochOffset] : null,
+          bollinger: i >= bbOffset ? bb[i - bbOffset] : null
+        };
+      });
 
       res.json(enhancedResults);
     } catch (error: any) {
@@ -207,15 +164,20 @@ app.post('/api/ai/analyze-sentiment', async (req, res) => {
         const highs = rawData.map(d => d.high).filter(h => h != null);
         const lows = rawData.map(d => d.low).filter(l => l != null);
         const opens = rawData.map(d => d.open).filter(o => o != null);
+        const volumes = rawData.map(d => d.volume).filter(v => v != null);
         
         // 1. Core Technical Indicators processing
         let quantScore = 0; // -100 to 100 momentum matrix
         let detectedSignals: Array<{name: string, impact: string}> = [];
         
+        // Advanced Regime Detection Variables
         let currentRsi: any = 50;
         let currentCci: any = 0;
         let currentBB: any = null;
         let currentAdx: any = { adx: 25 };
+        let currentIchimoku: any = null;
+        let currentStochRsi: any = null;
+        let volumeProfile = 1.0; 
 
         try {
             const rsi = RSI.calculate({ values: closes, period: 14 });
@@ -224,6 +186,13 @@ app.post('/api/ai/analyze-sentiment', async (req, res) => {
             const bb = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
             const cci = CCI.calculate({ high: highs, low: lows, close: closes, period: 20 });
             const adx = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
+            const ichimoku = IchimokuCloud.calculate({
+                high: highs, low: lows,
+                conversionPeriod: 9, basePeriod: 26, spanPeriod: 52, displacement: 26
+            });
+            const stochRsi = StochasticRSI.calculate({
+                values: closes, rsiPeriod: 14, stochasticPeriod: 14, kPeriod: 3, dPeriod: 3
+            });
             
             currentRsi = rsi[rsi.length - 1];
             const currentMacd = macd[macd.length - 1];
@@ -231,117 +200,263 @@ app.post('/api/ai/analyze-sentiment', async (req, res) => {
             currentBB = bb[bb.length - 1];
             currentCci = cci[cci.length - 1];
             currentAdx = adx[adx.length - 1];
+            currentIchimoku = ichimoku[ichimoku.length - 1];
+            currentStochRsi = stochRsi[stochRsi.length - 1];
             const currentClose = closes[closes.length - 1];
 
-            // Indicator Logic Routing
-            if (currentRsi < 30) { quantScore += 20; detectedSignals.push({ name: 'RSI Bullish Divergence', impact: 'bullish' }); }
-            else if (currentRsi > 70) { quantScore -= 20; detectedSignals.push({ name: 'RSI Overbought', impact: 'bearish' }); }
+            // 1a. Ichimoku Cloud Regime Processing
+            if (currentIchimoku) {
+              const { spanA, spanB, conversion, base } = currentIchimoku;
+              const cloudTop = Math.max(spanA, spanB);
+              const cloudBottom = Math.min(spanA, spanB);
 
-            if (currentStoch && currentStoch.k < 20 && currentStoch.k > currentStoch.d) { quantScore += 15; detectedSignals.push({ name: 'Stochastic Cross Base', impact: 'bullish'}); }
-            else if (currentStoch && currentStoch.k > 80 && currentStoch.k < currentStoch.d) { quantScore -= 15; detectedSignals.push({ name: 'Stochastic Cross Peak', impact: 'bearish'}); }
+              if (currentClose > cloudTop) {
+                  quantScore += 30; detectedSignals.push({ name: 'Price Above Ichimoku Cloud', impact: 'bullish' });
+              } else if (currentClose < cloudBottom) {
+                  quantScore -= 30; detectedSignals.push({ name: 'Price Below Ichimoku Cloud', impact: 'bearish' });
+              } else {
+                  detectedSignals.push({ name: 'Price Inside Ichimoku Cloud', impact: 'neutral' });
+              }
 
-            if (currentMacd && currentMacd.MACD && currentMacd.signal && currentMacd.histogram) {
-                if (currentMacd.MACD > currentMacd.signal && currentMacd.histogram > 0) { quantScore += 15; detectedSignals.push({ name: 'MACD Bullish Momentum', impact: 'bullish'}); }
-                else if (currentMacd.MACD < currentMacd.signal && currentMacd.histogram < 0) { quantScore -= 15; detectedSignals.push({ name: 'MACD Bearish Momentum', impact: 'bearish'}); }
+              if (conversion > base) {
+                  quantScore += 15; detectedSignals.push({ name: 'TK Cross Bullish', impact: 'bullish' });
+              } else {
+                  quantScore -= 10; detectedSignals.push({ name: 'TK Cross Bearish', impact: 'bearish' });
+              }
             }
 
-            if (currentBB && currentClose <= currentBB.lower) { quantScore += 20; detectedSignals.push({ name: 'BB Lower Bounce', impact: 'bullish'}); }
-            else if (currentBB && currentClose >= currentBB.upper) { quantScore -= 20; detectedSignals.push({ name: 'BB Upper Extension', impact: 'bearish'}); }
+            // 1b. Stochastic RSI Logic
+            if (currentStochRsi) {
+              if (currentStochRsi.stochRSI < 20) {
+                  quantScore += 20; detectedSignals.push({ name: 'StochRSI Oversold Rebound', impact: 'bullish' });
+              } else if (currentStochRsi.stochRSI > 80) {
+                  quantScore -= 20; detectedSignals.push({ name: 'StochRSI Overbought Pullback', impact: 'bearish' });
+              }
+            }
 
-            if (currentCci < -100) { quantScore += 10; detectedSignals.push({ name: 'CCI Oversold', impact: 'bullish'}); }
-            else if (currentCci > 100) { quantScore -= 10; detectedSignals.push({ name: 'CCI Overbought', impact: 'bearish'}); }
+            // Volume Analysis
+            if (volumes.length > 20) {
+                const avgVol = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+                volumeProfile = volumes[volumes.length - 1] / avgVol;
+                if (volumeProfile > 1.5) {
+                   quantScore += (currentClose > opens[opens.length - 1]) ? 10 : -10;
+                   detectedSignals.push({ name: 'High Volume Confirmation', impact: currentClose > opens[opens.length - 1] ? 'bullish' : 'bearish' });
+                }
+            }
 
-            // Candlestick Pattern Extraction (Last 5 Days - exhaustive pattern array)
-            const last5Data = {
-               open: opens.slice(-5),
-               high: highs.slice(-5),
-               low: lows.slice(-5),
-               close: closes.slice(-5)
-            };
-            
+            // Indicator Logic Routing (Weighted)
+            if (currentRsi < 30) { quantScore += 25; detectedSignals.push({ name: 'RSI Deep Oversold', impact: 'bullish' }); }
+            else if (currentRsi > 70) { quantScore -= 25; detectedSignals.push({ name: 'RSI Extreme Overbought', impact: 'bearish' }); }
+
+            if (currentStoch && currentStoch.k < 20 && currentStoch.k > currentStoch.d) { quantScore += 15; detectedSignals.push({ name: 'Stochastic Bullish Hook', impact: 'bullish'}); }
+            else if (currentStoch && currentStoch.k > 80 && currentStoch.k < currentStoch.d) { quantScore -= 15; detectedSignals.push({ name: 'Stochastic Bearish Crossover', impact: 'bearish'}); }
+
+            if (currentMacd && currentMacd.MACD && currentMacd.signal) {
+                const macdGap = currentMacd.MACD - currentMacd.signal;
+                if (macdGap > 0) { quantScore += 15; }
+                else { quantScore -= 15; }
+                if (Math.abs(macdGap) > Math.abs(macd[macd.length - 2]?.MACD - macd[macd.length - 2]?.signal)) {
+                   quantScore += (macdGap > 0) ? 5 : -5;
+                }
+            }
+
+            if (currentBB && currentClose <= currentBB.lower) { quantScore += 20; detectedSignals.push({ name: 'Volatility Band Support', impact: 'bullish'}); }
+            else if (currentBB && currentClose >= currentBB.upper) { quantScore -= 20; detectedSignals.push({ name: 'Volatility Band Resistance', impact: 'bearish'}); }
+
+            // Moving Average Crossovers (High weight)
+            const ma20 = calculateSMA(closes, 20);
+            const ma50 = calculateSMA(closes, 50);
+            if (ma20[ma20.length - 1] > ma50[ma50.length - 1] && ma20[ma20.length - 2] <= ma50[ma50.length - 2]) {
+                quantScore += 40; detectedSignals.push({ name: 'Golden Cross (Trend Alert)', impact: 'bullish'});
+            } else if (ma20[ma20.length - 1] < ma50[ma50.length - 1] && ma20[ma20.length - 2] >= ma50[ma50.length - 2]) {
+                quantScore -= 40; detectedSignals.push({ name: 'Death Cross (Trend Alert)', impact: 'bearish'});
+            }
+
+            // Candlestick Pattern Extraction
+            const last5Data = { open: opens.slice(-5), high: highs.slice(-5), low: lows.slice(-5), close: closes.slice(-5) };
             if (bullishengulfingpattern(last5Data)) { quantScore += 25; detectedSignals.push({ name: 'Bullish Engulfing', impact: 'bullish'}); }
             if (bearishengulfingpattern(last5Data)) { quantScore -= 25; detectedSignals.push({ name: 'Bearish Engulfing', impact: 'bearish'}); }
-            if (morningstar(last5Data)) { quantScore += 25; detectedSignals.push({ name: 'Morning Star', impact: 'bullish'}); }
-            if (eveningstar(last5Data)) { quantScore -= 25; detectedSignals.push({ name: 'Evening Star', impact: 'bearish'}); }
-            if (doji(last5Data)) { detectedSignals.push({ name: 'Doji Reversal Marker', impact: 'neutral'}); }
-            if (hammerpattern(last5Data)) { quantScore += 15; detectedSignals.push({ name: 'Hammer Reversal', impact: 'bullish'}); }
-            if (shootingstar(last5Data)) { quantScore -= 15; detectedSignals.push({ name: 'Shooting Star', impact: 'bearish'}); }
-            if (bullishharami(last5Data)) { quantScore += 15; detectedSignals.push({ name: 'Bullish Harami', impact: 'bullish'}); }
-            if (bearishharami(last5Data)) { quantScore -= 15; detectedSignals.push({ name: 'Bearish Harami', impact: 'bearish'}); }
-            if (piercingline(last5Data)) { quantScore += 20; detectedSignals.push({ name: 'Piercing Line', impact: 'bullish'}); }
-            if (darkcloudcover(last5Data)) { quantScore -= 20; detectedSignals.push({ name: 'Dark Cloud Cover', impact: 'bearish'}); }
-            
-            // Expanded Programmatic Formations
-            if (abandonedbaby(last5Data)) { quantScore += 25; detectedSignals.push({ name: 'Abandoned Baby Bullish', impact: 'bullish'}); }
-            if (downsidetasukigap(last5Data)) { quantScore -= 20; detectedSignals.push({ name: 'Downside Tasuki Gap', impact: 'bearish'}); }
-            if (dragonflydoji(last5Data)) { quantScore += 10; detectedSignals.push({ name: 'Dragonfly Doji', impact: 'bullish'}); }
-            if (gravestonedoji(last5Data)) { quantScore -= 10; detectedSignals.push({ name: 'Gravestone Doji', impact: 'bearish'}); }
-            if (bullishharamicross(last5Data)) { quantScore += 15; detectedSignals.push({ name: 'Bullish Harami Cross', impact: 'bullish'}); }
-            if (bearishharamicross(last5Data)) { quantScore -= 15; detectedSignals.push({ name: 'Bearish Harami Cross', impact: 'bearish'}); }
-            if (eveningdojistar(last5Data)) { quantScore -= 25; detectedSignals.push({ name: 'Evening Doji Star', impact: 'bearish'}); }
-            if (morningdojistar(last5Data)) { quantScore += 25; detectedSignals.push({ name: 'Morning Doji Star', impact: 'bullish'}); }
-            if (bullishmarubozu(last5Data)) { quantScore += 20; detectedSignals.push({ name: 'Bullish Marubozu', impact: 'bullish'}); }
-            if (bearishmarubozu(last5Data)) { quantScore -= 20; detectedSignals.push({ name: 'Bearish Marubozu', impact: 'bearish'}); }
-            if (bullishspinningtop(last5Data)) { detectedSignals.push({ name: 'Bullish Spinning Top', impact: 'neutral'}); }
-            if (bearishspinningtop(last5Data)) { detectedSignals.push({ name: 'Bearish Spinning Top', impact: 'neutral'}); }
-            if (threeblackcrows(last5Data)) { quantScore -= 35; detectedSignals.push({ name: 'Three Black Crows', impact: 'bearish'}); }
-            if (threewhitesoldiers(last5Data)) { quantScore += 35; detectedSignals.push({ name: 'Three White Soldiers', impact: 'bullish'}); }
-            if (tweezertop(last5Data)) { quantScore -= 20; detectedSignals.push({ name: 'Tweezer Top', impact: 'bearish'}); }
-            if (tweezerbottom(last5Data)) { quantScore += 20; detectedSignals.push({ name: 'Tweezer Bottom', impact: 'bullish'}); }
+            if (morningstar(last5Data)) { quantScore += 30; detectedSignals.push({ name: 'Morning Star Reversal', impact: 'bullish'}); }
+            if (eveningstar(last5Data)) { quantScore -= 30; detectedSignals.push({ name: 'Evening Star Reversal', impact: 'bearish'}); }
+            if (threeblackcrows(last5Data)) { quantScore -= 40; detectedSignals.push({ name: 'Three Black Crows', impact: 'bearish'}); }
+            if (threewhitesoldiers(last5Data)) { quantScore += 40; detectedSignals.push({ name: 'Three White Soldiers', impact: 'bullish'}); }
             
         } catch (quantErr) {
             console.error("Quant Analytics Error:", quantErr);
         }
 
-        // Keep quant score bounded tightly
-        quantScore = Math.max(-100, Math.min(100, quantScore));
-        const trendModifier = (quantScore / 100); // Output between -1.0 and +1.0
+        // 2. Sentiment Integration (Drift Bias)
+        let sentimentBias = 0;
+        try {
+            const newsRes = await yahooFinance.search(symbol, { newsCount: 5 });
+            const news = newsRes.news || [];
+            // Simple keyword-based sentiment for internal scoring if AI isn't called yet
+            const keywords = { pos: ['up', 'growth', 'buy', 'gain', 'positive', 'profit'], neg: ['down', 'fall', 'sell', 'loss', 'negative', 'crash'] };
+            news.forEach(n => {
+                const tit = n.title.toLowerCase();
+                keywords.pos.forEach(w => { if(tit.includes(w)) sentimentBias += 5; });
+                keywords.neg.forEach(w => { if(tit.includes(w)) sentimentBias -= 5; });
+            });
+        } catch(e) {}
 
-        // Machine Learning & Feature Engineering
-        // Replacing simple regression mapping with an Advanced LSTM-inspired Autoregressive Heuristic Sequence (AR-LSTM emulation algorithm)
-        const recentData = rawData.slice(-100).filter(d => d.close != null);
+        // Keep quant score bounded tightly
+        quantScore = Math.max(-100, Math.min(100, quantScore + (sentimentBias * 2)));
+        const trendModifier = (quantScore / 100); 
+
+        // 3. Ensemble AR-I-MA-Prophet Hybrid Engine (60-Day Horizon)
+        const recentData = rawData.slice(-120).filter(d => d.close != null);
+        const prices = recentData.map(d => d.close);
+        
+        // Integrated (I) - Differencing via Log Returns
+        const logReturns = [];
+        for(let i = 1; i < prices.length; i++){
+            logReturns.push(Math.log(prices[i] / prices[i-1]));
+        }
+
+        // Dynamic Volatility Calculation (Recent Price Action)
+        const recentLogReturns = logReturns.slice(-30);
+        const logMean = recentLogReturns.reduce((a, b) => a + b, 0) / recentLogReturns.length || 0;
+        const logVariance = recentLogReturns.reduce((sq, n) => sq + Math.pow(n - logMean, 2), 0) / recentLogReturns.length || 0.0001;
+        const recentVolatility = Math.sqrt(logVariance);
+
+        // Seasonality (Daily/Prophet-like weekly estimation)
+        const dailyAverages = new Array(7).fill(0);
+        const dailyCounts = new Array(7).fill(0);
+        recentData.forEach((d, i) => {
+            if (i > 0) {
+                const day = new Date(d.date).getDay();
+                const ret = Math.log(d.close / recentData[i-1].close);
+                dailyAverages[day] += ret;
+                dailyCounts[day]++;
+            }
+        });
+        const weekdayExpectancy = dailyAverages.map((val, i) => dailyCounts[i] > 0 ? val / dailyCounts[i] : 0);
+
+        // Holt-Winters level/trend
+        let level = prices[0];
+        let trend = prices[1] - prices[0];
+        const alpha = 0.25, beta = 0.15; 
+        for(let i = 1; i < prices.length; i++) {
+            const lastLevel = level;
+            level = alpha * prices[i] + (1 - alpha) * (level + trend);
+            trend = beta * (level - lastLevel) + (1 - beta) * trend;
+        }
+
         const dataForRegression = recentData.map((d, i) => [i, d.close]);
         const regression = linearRegression(dataForRegression);
-        const baselineLine = linearRegressionLine(regression);
-
-        const futurePoints = [];
         const lastDate = new Date(recentData[recentData.length - 1].date);
         
+        // 4. Advanced Ensemble Meta-Learner (Elastic Softmax + Market Correlation)
+        let marketVolatility = 0.015;
+        let marketCorrelation = 0.5;
+        try {
+            const p1 = new Date();
+            p1.setMonth(p1.getMonth() - 3);
+            const marketData = await yahooFinance.chart('^NSEI', { interval: '1d', period1: p1.toISOString() });
+            const mQuotes = marketData.quotes.filter((q: any) => q.close != null);
+            if (mQuotes.length > 20) {
+                const mReturns = [];
+                const sReturns = [];
+                const lookback = Math.min(mQuotes.length, prices.length) - 1;
+                
+                for(let j = 1; j <= 30 && j <= lookback; j++) {
+                    const sPrev = prices[prices.length - 1 - j];
+                    const sCurr = prices[prices.length - j];
+                    const mPrev = mQuotes[mQuotes.length - 1 - j].close;
+                    const mCurr = mQuotes[mQuotes.length - j].close;
+                    sReturns.push(Math.log(sCurr / sPrev));
+                    mReturns.push(Math.log(mCurr / mPrev));
+                }
+
+                // Market Volatility
+                const mMean = mReturns.reduce((a, b) => a + b, 0) / mReturns.length;
+                const mVar = mReturns.reduce((sq, n) => sq + Math.pow(n - mMean, 2), 0) / mReturns.length;
+                marketVolatility = Math.sqrt(mVar);
+
+                // Correlation
+                const sMean = sReturns.reduce((a, b) => a + b, 0) / sReturns.length;
+                let num = 0, denS = 0, denM = 0;
+                for(let k = 0; k < sReturns.length; k++) {
+                    const ds = sReturns[k] - sMean;
+                    const dm = mReturns[k] - mMean;
+                    num += ds * dm;
+                    denS += ds * ds;
+                    denM += dm * dm;
+                }
+                marketCorrelation = Math.abs(num / Math.sqrt(denS * denM)) || 0.5;
+            }
+        } catch(e) { console.warn("Correlation fetch failed:", e); }
+
+        // Evaluate sub-models over backtest window
+        let trendError = 0;
+        let meanRevError = 0;
+        const testWindow = 15;
+        for (let i = prices.length - testWindow; i < prices.length; i++) {
+            const actual = prices[i];
+            const tPred = level + (trend * (i - (prices.length - 1)));
+            const mPred = regression.b + (regression.m * i);
+            trendError += Math.abs(actual - tPred) / actual; // Use Normalized MAE
+            meanRevError += Math.abs(actual - mPred) / actual;
+        }
+        
+        // Elastic Softmax Weighting
+        // We use a high temperature to penalize high errors exponentially
+        const temp = 0.05;
+        const eTrend = Math.exp(-trendError / temp);
+        const eMean = Math.exp(-meanRevError / temp);
+        let finalTrendWeight = eTrend / (eTrend + eMean);
+        let finalMeanRevWeight = eMean / (eTrend + eMean);
+
+        // 4b. Regime Modulation (ADX + CCI influence)
+        // ADX determines "TrendingNESS", CCI determines "Cyclical Momentum"
+        if (currentAdx && currentAdx.adx > 30) {
+            finalTrendWeight = Math.min(0.9, finalTrendWeight * 1.5);
+            finalMeanRevWeight = 1 - finalTrendWeight;
+        } else if (currentAdx && currentAdx.adx < 18 && Math.abs(currentCci) < 100) {
+            finalMeanRevWeight = Math.min(0.9, finalMeanRevWeight * 1.5);
+            finalTrendWeight = 1 - finalMeanRevWeight;
+        }
+
         let predictedClose = recentData[recentData.length - 1].close;
+        const bbBandwidth = currentBB ? (currentBB.upper - currentBB.lower) / currentBB.middle : 0.05;
         
-        // Feature Extracted Variables from Technical Indicators
-        const adxValue = currentAdx ? currentAdx.adx : 25; // Trend Strength (0-100)
-        const cciMomentum = currentCci ? Math.max(-1, Math.min(1, currentCci / 200)) : 0; // Normalized Momentum [-1 to 1]
-        const bbBandwidth = currentBB ? (currentBB.upper - currentBB.lower) / currentBB.middle : 0.05; // Volatility
-        const rsiFactor = currentRsi ? (50 - currentRsi) / 100 : 0; // Mean reversion pressure from RSI
+        // 5. Volatility Scaling (Market-Beta Adjusted)
+        // volatility is idiosyncratic + (systemic * correlation)
+        const systemicRisk = marketVolatility * marketCorrelation;
+        const idiosyncraticRisk = recentVolatility * (1 - marketCorrelation);
+        const combinedVolatility = (idiosyncraticRisk * 0.7) + (systemicRisk * 0.3) + (bbBandwidth * 0.05); 
+        const volatilityScaler = Math.max(0.008, combinedVolatility);
+        const regimeBias = quantScore / 100;
 
-        // LSTM Memory Cell emulation factors
-        let hiddenState = trendModifier * 0.02; // Base drift from quant signals
-        let cellState = 0; // Accumulated momentum memory
-        
-        const trendStrengthMultiplier = Math.min(1, adxValue / 50); // Scale 0 to 1 based on ADX
-
-        for (let i = 1; i <= 30; i++) {
+        const futurePoints = [];
+        for (let i = 1; i <= 60; i++) {
             const fDate = new Date(lastDate);
             fDate.setDate(fDate.getDate() + i);
+            const dayOfWeek = fDate.getDay();
             
-            // 1. Forget & Update Gate simulation
-            const regressionMean = baselineLine(recentData.length - 1 + i);
-            const priceToMeanDistance = (regressionMean - predictedClose) / predictedClose;
+            // 1. Ensemble Consensus Drift (Decaying Horizon)
+            const structuralDrift = (trend / predictedClose) * 0.45 * finalTrendWeight;
+            const regTarget = (regression.b + regression.m * (recentData.length - 1 + i));
+            const meanReversionForce = (regTarget - predictedClose) / predictedClose * 0.15 * finalMeanRevWeight;
             
-            // Reversion pushes price back to mean if Trend (ADX) is weak. If ADX is high, it ignores the mean.
-            const reversionPull = priceToMeanDistance * (1 - trendStrengthMultiplier) * 0.1;
+            // 2. Seasonality & Regime
+            const seasonalDrift = weekdayExpectancy[dayOfWeek] * 0.45;
+            const biasDecay = Math.exp(-i / 25); 
+            const biasForce = regimeBias * 0.015 * biasDecay;
             
-            // Momentum carries forward based on CCI and previous hidden state
-            const momentumDrift = cciMomentum * bbBandwidth * 0.5 * trendStrengthMultiplier;
+            // 3. Dynamic Volatility & Variance (Exponential growth with time)
+            const stochRsiHeat = currentStochRsi ? (currentStochRsi.stochRSI / 100) : 0.5;
+            const variance = volatilityScaler * (1 + (stochRsiHeat * 0.4)) * Math.sqrt(i) * 0.12;
 
-            // RNN/LSTM combination
-            cellState = (cellState * 0.85) + (momentumDrift + reversionPull + (hiddenState * 2) + (rsiFactor * 0.1)) * 0.15;
-            const outputGate = Math.tanh(cellState) * 0.04; // Limit daily change to ~4% max for realism
+            // Boosting heuristic
+            const alignmentBonus = (Math.sign(structuralDrift) === Math.sign(biasForce)) ? 1.25 : 0.75;
             
-            // Add slight brownian noise
-            const noise = (Math.random() - 0.5) * 0.005;
-            predictedClose = predictedClose * (1 + outputGate + noise);
+            const netDrift = (structuralDrift + meanReversionForce + biasForce + seasonalDrift) * alignmentBonus;
+            const noise = (Math.random() - 0.5) * variance;
+            const cappedDrift = Math.tanh(netDrift * 15) / 15;
+            const dailyChange = Math.max(-0.05, Math.min(0.05, cappedDrift + noise));
+
+            predictedClose = predictedClose * (1 + dailyChange);
 
             futurePoints.push({
                 date: fDate.toISOString(),
