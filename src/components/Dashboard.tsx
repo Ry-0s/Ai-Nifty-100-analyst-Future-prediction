@@ -20,6 +20,17 @@ import {
 declare const process: any;
 const aiSDK = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
+// Clean JSON output from AI
+const cleanAIJSON = (text: string) => {
+    try {
+        const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        return JSON.parse(cleaned);
+    } catch (e) {
+        console.error("AI JSON Parse Error:", e, text);
+        return {};
+    }
+};
+
 // Hybrid AI Logic: Prefer direct SDK in AI Studio Preview, fallback to Backend on Vercel
 const getAIAnalysis = async (dataSample: any, symbol: string) => {
     // 1. Try Direct SDK (Fastest for Preview)
@@ -40,7 +51,7 @@ const getAIAnalysis = async (dataSample: any, symbol: string) => {
                     }
                 }
             });
-            return JSON.parse(response.text || "{}");
+            return cleanAIJSON(response.text || "{}");
         } catch (e) { console.warn("Direct AI failed, falling back to backend..."); }
     }
 
@@ -72,7 +83,7 @@ const getSentimentAnalysis = async (newsArr: any[], symbol: string) => {
                     }
                 }
             });
-            return JSON.parse(response.text || "{}");
+            return cleanAIJSON(response.text || "{}");
         } catch (e) { console.warn("Direct Sentiment failed, falling back to backend..."); }
     }
 
@@ -583,22 +594,23 @@ export default function Dashboard() {
                       <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Overall Market Sentiment</span>
                       <span className={cn(
                         "text-sm font-bold",
-                        newsData.sentiment === 'positive' ? 'text-green-500' :
-                        newsData.sentiment === 'negative' ? 'text-red-500' : 'text-zinc-500'
+                        (newsData.sentiment || 'neutral') === 'positive' ? 'text-green-500' :
+                        (newsData.sentiment || 'neutral') === 'negative' ? 'text-red-500' : 'text-zinc-500'
                       )}>
-                        {newsData.sentimentScore}/100 ({newsData.sentiment})
+                        {newsData.sentimentScore ?? 50}/100 ({(newsData.sentiment || 'neutral').toUpperCase()})
                       </span>
                   </div>
-                  <div className="w-full h-2.5 rounded-full bg-gradient-to-r from-red-500 via-zinc-300 to-green-500 relative">
+                  <div className="w-full h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 relative overflow-hidden">
+                     <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-red-500 via-zinc-400 to-green-500 opacity-20 w-full" />
                      <div 
-                        className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-zinc-900 rounded-full shadow-sm"
-                        style={{ left: `calc(${newsData.sentimentScore}% - 8px)` }}
-                     ></div>
+                        className="absolute top-0 bottom-0 w-1 bg-zinc-900 dark:bg-white transition-all duration-1000 z-10" 
+                        style={{ left: `${newsData.sentimentScore ?? 50}%`, transform: 'translateX(-50%)' }}
+                     />
                   </div>
                </div>
 
-               <p className="text-zinc-600 dark:text-zinc-400 text-sm italic">
-                  "{newsData.summary}"
+               <p className="text-zinc-600 dark:text-zinc-400 text-sm italic leading-relaxed">
+                  {newsData.summary ? `"${newsData.summary}"` : "AI Analysis pending news data stable input..."}
                </p>
 
                <div className="space-y-2 mt-4 max-h-[220px] overflow-y-auto pr-2 custom-scrollbar">

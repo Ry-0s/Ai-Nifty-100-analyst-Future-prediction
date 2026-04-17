@@ -17,6 +17,17 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 app.use(express.json());
 
+// Clean JSON output from AI
+const cleanAIJSON = (text: string) => {
+    try {
+        const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        return JSON.parse(cleaned);
+    } catch (e) {
+        console.error("AI JSON Parse Error:", e, text);
+        return {};
+    }
+};
+
 // AI Backend Routes
 app.post('/api/ai/analyze-patterns', async (req, res) => {
     try {
@@ -36,7 +47,7 @@ app.post('/api/ai/analyze-patterns', async (req, res) => {
                 }
             }
         });
-        res.json(JSON.parse(aiResponse.text || "{}"));
+        res.json(cleanAIJSON(aiResponse.text || "{}"));
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
@@ -62,7 +73,7 @@ app.post('/api/ai/analyze-sentiment', async (req, res) => {
                 }
             }
         });
-        res.json(JSON.parse(aiResponse.text || "{}"));
+        res.json(cleanAIJSON(aiResponse.text || "{}"));
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
