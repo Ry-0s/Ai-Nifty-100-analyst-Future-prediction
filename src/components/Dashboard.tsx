@@ -540,8 +540,14 @@ export default function Dashboard() {
 
               <div className="space-y-3">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Gemini Generative Breakdown</h3>
+                {predictions.aiPatternAnalysis?.error && (
+                  <div className="p-3 bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 rounded-lg">
+                    <p className="text-xs text-red-600 dark:text-red-400 font-medium">AI Analysis Error: {predictions.aiPatternAnalysis.error}</p>
+                    <p className="text-[10px] text-red-500 mt-1">Check Vercel environment variables or API key configuration.</p>
+                  </div>
+                )}
                 <p className="text-zinc-600 dark:text-zinc-400 text-sm leading-relaxed">
-                  {predictions.aiPatternAnalysis?.overallSummary || 'No specific overarching trend identified.'}
+                  {predictions.aiPatternAnalysis?.overallSummary || (predictions.aiPatternAnalysis?.error ? '' : 'No specific overarching trend identified.')}
                 </p>
                 {predictions.aiPatternAnalysis?.patterns?.length > 0 ? (
                   predictions.aiPatternAnalysis.patterns.map((p: any, i: number) => (
@@ -609,8 +615,13 @@ export default function Dashboard() {
                   </div>
                </div>
 
+               {newsData.error && (
+                  <div className="p-3 bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800 rounded-lg">
+                    <p className="text-xs text-red-600 dark:text-red-400 font-medium">Sentiment Evaluation Error: {newsData.error}</p>
+                  </div>
+               )}
                <p className="text-zinc-600 dark:text-zinc-400 text-sm italic leading-relaxed">
-                  {newsData.summary ? `"${newsData.summary}"` : "AI Analysis pending news data stable input..."}
+                  {newsData.summary ? `"${newsData.summary}"` : (newsData.error ? '' : "AI Analysis pending news data stable input...")}
                </p>
 
                <div className="space-y-2 mt-4 max-h-[220px] overflow-y-auto pr-2 custom-scrollbar">

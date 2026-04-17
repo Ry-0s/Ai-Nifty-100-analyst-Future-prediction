@@ -21,68 +21,81 @@ async function startServer() {
 
   app.use(express.json());
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-  // Clean JSON output from AI
-  const cleanAIJSON = (text: string) => {
-    try {
-      const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      return JSON.parse(cleaned);
-    } catch (e) {
-      console.error("AI JSON Parse Error:", e, text);
-      return {};
+// Lazy initialize AI client
+let aiClient: any = null;
+const getAIClient = () => {
+    if (!aiClient) {
+        const key = process.env.GEMINI_API_KEY;
+        if (!key) throw new Error("GEMINI_API_KEY missing");
+        aiClient = new GoogleGenAI({ apiKey: key });
     }
-  };
+    return aiClient;
+};
 
-  // AI Backend Routes
-  app.post('/api/ai/analyze-patterns', async (req, res) => {
-    try {
-      const { dataSample, symbol } = req.body;
-      const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
-      const aiResponse = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              patterns: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { patternName: { type: Type.STRING }, confidence: { type: Type.NUMBER }, description: { type: Type.STRING }, trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] } } } },
-              overallSummary: { type: Type.STRING }
-            }
+// Clean JSON output from AI
+const cleanAIJSON = (text: string) => {
+  try {
+    const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("AI JSON Parse Error:", e, text);
+    return { error: "Failed to parse AI response", raw: text };
+  }
+};
+
+// AI Backend Routes
+app.post('/api/ai/analyze-patterns', async (req, res) => {
+  try {
+    const ai = getAIClient();
+    const { dataSample, symbol } = req.body;
+    const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
+    const aiResponse = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            patterns: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { patternName: { type: Type.STRING }, confidence: { type: Type.NUMBER }, description: { type: Type.STRING }, trendImpact: { type: Type.STRING, enum: ["bullish", "bearish", "neutral"] } } } },
+            overallSummary: { type: Type.STRING }
           }
         }
-      });
-      res.json(cleanAIJSON(aiResponse.text || "{}"));
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+      }
+    });
+    res.json(cleanAIJSON(aiResponse.text || "{}"));
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-  app.post('/api/ai/analyze-sentiment', async (req, res) => {
-    try {
-      const { newsArr, symbol } = req.body;
-      const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
-      const aiResponse = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
-              sentimentScore: { type: Type.NUMBER },
-              summary: { type: Type.STRING }
-            }
+app.post('/api/ai/analyze-sentiment', async (req, res) => {
+  try {
+    const ai = getAIClient();
+    const { newsArr, symbol } = req.body;
+    const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
+    const aiResponse = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
+            sentimentScore: { type: Type.NUMBER },
+            summary: { type: Type.STRING }
           }
         }
-      });
-      res.json(cleanAIJSON(aiResponse.text || "{}"));
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+      }
+    });
+    res.json(cleanAIJSON(aiResponse.text || "{}"));
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
   // NIFTY 100 sample + Global valid symbols
   const SYMBOLS = [

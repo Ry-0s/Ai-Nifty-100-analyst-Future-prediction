@@ -13,7 +13,19 @@ import {
 
 const app = express();
 const yahooFinance = new YahooFinance();
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+
+// Lazy initialize AI client to handle missing keys gracefully on Vercel
+let aiClient: any = null;
+const getAIClient = () => {
+    if (!aiClient) {
+        const key = process.env.GEMINI_API_KEY;
+        if (!key) {
+            throw new Error("GEMINI_API_KEY environment variable is not set. Please add it to your Vercel project settings.");
+        }
+        aiClient = new GoogleGenAI({ apiKey: key });
+    }
+    return aiClient;
+};
 
 app.use(express.json());
 
@@ -24,13 +36,14 @@ const cleanAIJSON = (text: string) => {
         return JSON.parse(cleaned);
     } catch (e) {
         console.error("AI JSON Parse Error:", e, text);
-        return {};
+        return { error: "Failed to parse AI response as JSON", raw: text };
     }
 };
 
 // AI Backend Routes
 app.post('/api/ai/analyze-patterns', async (req, res) => {
     try {
+        const ai = getAIClient();
         const { dataSample, symbol } = req.body;
         const prompt = `Analyze Stock Patterns for ${symbol}. Identifiy Macro Formations and Candlestick variations. Data: ${JSON.stringify(dataSample)}`;
         const aiResponse = await ai.models.generateContent({
@@ -49,12 +62,14 @@ app.post('/api/ai/analyze-patterns', async (req, res) => {
         });
         res.json(cleanAIJSON(aiResponse.text || "{}"));
     } catch (e: any) {
-        res.status(500).json({ error: e.message });
+        console.error("AI Analyze Patterns Error:", e.message);
+        res.status(500).json({ error: e.message, status: "AI_ERROR" });
     }
 });
 
 app.post('/api/ai/analyze-sentiment', async (req, res) => {
     try {
+        const ai = getAIClient();
         const { newsArr, symbol } = req.body;
         if (!newsArr || newsArr.length === 0) return res.json({ sentiment: "neutral", sentimentScore: 50, summary: "No news." });
         const prompt = `Analyze Sentiment (Score 0-100) for ${symbol}. News: ${JSON.stringify(newsArr)}`;
@@ -75,7 +90,8 @@ app.post('/api/ai/analyze-sentiment', async (req, res) => {
         });
         res.json(cleanAIJSON(aiResponse.text || "{}"));
     } catch (e: any) {
-        res.status(500).json({ error: e.message });
+        console.error("AI Sentiment Error:", e.message);
+        res.status(500).json({ error: e.message, status: "AI_ERROR" });
     }
 });
 
