@@ -94,50 +94,83 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
         period1.setFullYear(now.getFullYear() - 1);
 
         const chartData: any = await yahooFinance.chart(symbol, { period1: period1.toISOString(), interval: '1d' });
-        const rawData: any[] = chartData.quotes || [];
+        const rawData: any[] = (chartData.quotes || []).filter((q: any) => q.close != null);
         if (rawData.length < 50) return res.json({ error: "Not enough data" });
 
-        const closes = rawData.map(d => d.close).filter(c => c != null);
+        const closes = rawData.map(d => d.close);
         const highs = rawData.map(d => d.high).filter(h => h != null);
         const lows = rawData.map(d => d.low).filter(l => l != null);
         const opens = rawData.map(d => d.open).filter(o => o != null);
         
-        // Re-implement the AR-LSTM emulation logic concisely
         let quantScore = 0;
-        let signals: any[] = [];
+        let detectedSignals: any[] = [];
         
-        const rsi = RSI.calculate({ values: closes, period: 14 });
-        const currentRsi = rsi[rsi.length - 1] || 50;
-        if (currentRsi < 30) { quantScore += 20; signals.push({ name: 'RSI Bullish', impact: 'bullish' }); }
-        else if (currentRsi > 70) { quantScore -= 20; signals.push({ name: 'RSI Overbought', impact: 'bearish' }); }
+        try {
+            const rsi = RSI.calculate({ values: closes, period: 14 });
+            const macd = MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
+            const stoch = stochastic({ high: highs, low: lows, close: closes, period: 14, signalPeriod: 3 });
+            const bb = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
+            const cci = CCI.calculate({ high: highs, low: lows, close: closes, period: 20 });
+            const adx = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
+            
+            const currentRsi = rsi[rsi.length - 1];
+            const currentMacd = macd[macd.length - 1];
+            const currentStoch = stoch[stoch.length - 1];
+            const currentBB = bb[bb.length - 1];
+            const currentCci = cci[cci.length - 1];
+            const currentAdx = adx[adx.length - 1];
+            const currentClose = closes[closes.length - 1];
 
-        const last5 = { open: opens.slice(-5), high: highs.slice(-5), low: lows.slice(-5), close: closes.slice(-5) };
-        if (bullishengulfingpattern(last5)) { quantScore += 25; signals.push({ name: 'Bullish Engulfing', impact: 'bullish' }); }
+            if (currentRsi < 30) { quantScore += 20; detectedSignals.push({ name: 'RSI Bullish', impact: 'bullish' }); }
+            else if (currentRsi > 70) { quantScore -= 20; detectedSignals.push({ name: 'RSI Overbought', impact: 'bearish' }); }
 
-        const regression = linearRegression(rawData.slice(-100).filter(d => d.close != null).map((d, i) => [i, d.close]));
-        const baselineLine = linearRegressionLine(regression);
-        
-        const futurePoints = [];
-        const lastDate = new Date(rawData[rawData.length - 1].date);
-        let pred = closes[closes.length - 1];
+            if (currentMacd && currentMacd.MACD > currentMacd.signal) { quantScore += 15; detectedSignals.push({ name: 'MACD Bullish', impact: 'bullish' }); }
+            else { quantScore -= 15; detectedSignals.push({ name: 'MACD Bearish', impact: 'bearish' }); }
 
-        for (let i = 1; i <= 30; i++) {
-            const fDate = new Date(lastDate);
-            fDate.setDate(fDate.getDate() + i);
-            const drift = (quantScore / 100) * 0.01;
-            pred = pred * (1 + (drift + (Math.random() - 0.5) * 0.005));
-            futurePoints.push({ date: fDate.toISOString(), predictedClose: parseFloat(pred.toFixed(2)) });
+            const last5 = { open: opens.slice(-5), high: highs.slice(-5), low: lows.slice(-5), close: closes.slice(-5) };
+            if (bullishengulfingpattern(last5)) { quantScore += 25; detectedSignals.push({ name: 'Bullish Engulfing', impact: 'bullish' }); }
+            if (bearishengulfingpattern(last5)) { quantScore -= 25; detectedSignals.push({ name: 'Bearish Engulfing', impact: 'bearish' }); }
+            if (hammerpattern(last5)) { quantScore += 15; detectedSignals.push({ name: 'Hammer Pattern', impact: 'bullish' }); }
+            if (shootingstar(last5)) { quantScore -= 15; detectedSignals.push({ name: 'Shooting Star', impact: 'bearish' }); }
+
+            // AR-LSTM Emulation
+            const recentData = rawData.slice(-100);
+            const regression = linearRegression(recentData.map((d, i) => [i, d.close]));
+            const baselineLine = linearRegressionLine(regression);
+            
+            const futurePoints = [];
+            let predictedClose = closes[closes.length - 1];
+            const adxValue = currentAdx ? currentAdx.adx : 25;
+            const cciMomentum = currentCci ? Math.max(-1, Math.min(1, currentCci / 200)) : 0;
+            const trendModifier = quantScore / 100;
+
+            let cellState = 0;
+            const trendStrengthMultiplier = Math.min(1, adxValue / 50);
+
+            for (let i = 1; i <= 30; i++) {
+                const fDate = new Date(recentData[recentData.length - 1].date);
+                fDate.setDate(fDate.getDate() + i);
+                const regMean = baselineLine(recentData.length - 1 + i);
+                const revPull = (regMean - predictedClose) / predictedClose * (1 - trendStrengthMultiplier) * 0.1;
+                const momDrift = cciMomentum * 0.01 * trendStrengthMultiplier;
+
+                cellState = (cellState * 0.8) + (momDrift + revPull + (trendModifier * 0.01)) * 0.1;
+                predictedClose = predictedClose * (1 + Math.tanh(cellState) * 0.015);
+                futurePoints.push({ date: fDate.toISOString(), predictedClose: parseFloat(predictedClose.toFixed(2)) });
+            }
+
+            res.json({
+                futurePoints,
+                trendGradient: regression.m,
+                dataSampleForAI: rawData.slice(-45).map(d => ({
+                    date: d.date.toISOString().split("T")[0],
+                    open: d.open.toFixed(2), high: d.high.toFixed(2), low: d.low.toFixed(2), close: d.close.toFixed(2), volume: d.volume
+                })),
+                quantSignals: { score: quantScore, signals: detectedSignals }
+            });
+        } catch (e: any) {
+            res.status(500).json({ error: e.message });
         }
-
-        res.json({
-            futurePoints,
-            trendGradient: regression.m,
-            dataSampleForAI: rawData.slice(-45).filter(d => d.open && d.close).map(d => ({
-                date: d.date.toISOString().split("T")[0],
-                open: d.open.toFixed(2), high: d.high.toFixed(2), low: d.low.toFixed(2), close: d.close.toFixed(2), volume: d.volume
-            })),
-            quantSignals: { score: quantScore, signals }
-        });
     } catch(err: any) {
         res.status(500).json({ error: err.message });
     }
