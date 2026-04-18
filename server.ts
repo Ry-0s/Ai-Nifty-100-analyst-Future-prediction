@@ -160,11 +160,16 @@ async function startServer() {
         }
 
         // Extraction arrays for Quantitative TA
-        const closes = rawData.map(d => d.close).filter(c => c != null);
-        const highs = rawData.map(d => d.high).filter(h => h != null);
-        const lows = rawData.map(d => d.low).filter(l => l != null);
-        const opens = rawData.map(d => d.open).filter(o => o != null);
-        const volumes = rawData.map(d => d.volume).filter(v => v != null);
+        const filteredData = rawData.filter(d => d.close != null && d.open != null && d.high != null && d.low != null);
+        const closes = filteredData.map(d => d.close);
+        const highs = filteredData.map(d => d.high);
+        const lows = filteredData.map(d => d.low);
+        const opens = filteredData.map(d => d.open);
+        const volumes = filteredData.map(d => d.volume);
+        
+        if (closes.length < 50) {
+            return res.json({ error: "Not enough valid historical data for analysis." });
+        }
         
         // 1. Core Technical Indicators processing
         let quantScore = 0; // -100 to 100 momentum matrix
@@ -251,12 +256,15 @@ async function startServer() {
             if (currentStoch && currentStoch.k < 20 && currentStoch.k > currentStoch.d) { quantScore += 15; detectedSignals.push({ name: 'Stochastic Bullish Hook', impact: 'bullish'}); }
             else if (currentStoch && currentStoch.k > 80 && currentStoch.k < currentStoch.d) { quantScore -= 15; detectedSignals.push({ name: 'Stochastic Bearish Crossover', impact: 'bearish'}); }
 
-            if (currentMacd && currentMacd.MACD && currentMacd.signal) {
+            if (currentMacd && typeof currentMacd.MACD === 'number' && typeof currentMacd.signal === 'number') {
                 const macdGap = currentMacd.MACD - currentMacd.signal;
                 if (macdGap > 0) { quantScore += 15; }
                 else { quantScore -= 15; }
-                if (Math.abs(macdGap) > Math.abs(macd[macd.length - 2]?.MACD - macd[macd.length - 2]?.signal)) {
-                   quantScore += (macdGap > 0) ? 5 : -5;
+                const prevMacd = macd[macd.length - 2];
+                if (prevMacd && typeof prevMacd.MACD === 'number' && typeof prevMacd.signal === 'number') {
+                    if (Math.abs(macdGap) > Math.abs(prevMacd.MACD - prevMacd.signal)) {
+                        quantScore += (macdGap > 0) ? 5 : -5;
+                    }
                 }
             }
 
@@ -272,14 +280,30 @@ async function startServer() {
                 quantScore -= 40; detectedSignals.push({ name: 'Death Cross (Trend Alert)', impact: 'bearish'});
             }
 
-            // Candlestick Pattern Extraction
-            const last5Data = { open: opens.slice(-5), high: highs.slice(-5), low: lows.slice(-5), close: closes.slice(-5) };
-            if (bullishengulfingpattern(last5Data)) { quantScore += 25; detectedSignals.push({ name: 'Bullish Engulfing', impact: 'bullish'}); }
-            if (bearishengulfingpattern(last5Data)) { quantScore -= 25; detectedSignals.push({ name: 'Bearish Engulfing', impact: 'bearish'}); }
-            if (morningstar(last5Data)) { quantScore += 30; detectedSignals.push({ name: 'Morning Star Reversal', impact: 'bullish'}); }
-            if (eveningstar(last5Data)) { quantScore -= 30; detectedSignals.push({ name: 'Evening Star Reversal', impact: 'bearish'}); }
-            if (threeblackcrows(last5Data)) { quantScore -= 40; detectedSignals.push({ name: 'Three Black Crows', impact: 'bearish'}); }
-            if (threewhitesoldiers(last5Data)) { quantScore += 40; detectedSignals.push({ name: 'Three White Soldiers', impact: 'bullish'}); }
+             // Candlestick Pattern Extraction
+             const last5Data = { open: opens.slice(-5), high: highs.slice(-5), low: lows.slice(-5), close: closes.slice(-5) };
+             if (bullishengulfingpattern(last5Data)) { quantScore += 25; detectedSignals.push({ name: 'Bullish Engulfing', impact: 'bullish'}); }
+             if (bearishengulfingpattern(last5Data)) { quantScore -= 25; detectedSignals.push({ name: 'Bearish Engulfing', impact: 'bearish'}); }
+             if (morningstar(last5Data)) { quantScore += 30; detectedSignals.push({ name: 'Morning Star Reversal', impact: 'bullish'}); }
+             if (eveningstar(last5Data)) { quantScore -= 30; detectedSignals.push({ name: 'Evening Star Reversal', impact: 'bearish'}); }
+             if (threeblackcrows(last5Data)) { quantScore -= 40; detectedSignals.push({ name: 'Three Black Crows', impact: 'bearish'}); }
+             if (threewhitesoldiers(last5Data)) { quantScore += 40; detectedSignals.push({ name: 'Three White Soldiers', impact: 'bullish'}); }
+
+             // Volatility Squeeze Detection
+             if (currentBB) {
+                 const bandwidth = (currentBB.upper - currentBB.lower) / currentBB.middle;
+                 if (bandwidth < 0.03) {
+                     detectedSignals.push({ name: 'Volatility Squeeze (Breakout Incoming)', impact: 'neutral' });
+                     quantScore += 5; 
+                 }
+             }
+
+             // ADX Trend Strength weight
+             if (currentAdx && currentAdx.adx > 25) {
+                 const trendDir = closes[closes.length - 1] > closes[closes.length - 20] ? 1 : -1;
+                 quantScore += (trendDir * 10);
+                 detectedSignals.push({ name: `Strong ${trendDir > 0 ? 'Bullish' : 'Bearish'} Trend (ADX)`, impact: trendDir > 0 ? 'bullish' : 'bearish' });
+             }
             
         } catch (quantErr) {
             console.error("Quant Analytics Error:", quantErr);
@@ -498,7 +522,9 @@ async function startServer() {
 
             futurePoints.push({
                 date: fDate.toISOString(),
-                predictedClose: parseFloat(predictedClose.toFixed(2))
+                predictedClose: parseFloat(predictedClose.toFixed(2)),
+                uncertaintyHigh: parseFloat((predictedClose * (1 + (variance * 2.0))).toFixed(2)),
+                uncertaintyLow: parseFloat((predictedClose * (1 - (variance * 2.0))).toFixed(2))
             });
         }
 

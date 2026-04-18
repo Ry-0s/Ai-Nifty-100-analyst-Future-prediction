@@ -214,7 +214,9 @@ const getSentimentAnalysis = async (newsArr: any[], symbol: string) => {
     }
     try {
         const ai = new GoogleGenAI({ apiKey: key });
-        const prompt = `Analyze sentiment for ${symbol}. Headlines: ${JSON.stringify(newsArr.slice(0, 10))}`;
+        const prompt = `Analyze sentiment for ${symbol}. Headlines: ${JSON.stringify(newsArr.slice(0, 10))}. 
+        Return a sentiment score between 0 and 100, where 0 is extremely negative, 50 is neutral, and 100 is extremely positive. 
+        IMPORTANT: Ensure sentimentScore is an INTEGER between 0 and 100.`;
 
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
@@ -225,7 +227,10 @@ const getSentimentAnalysis = async (newsArr: any[], symbol: string) => {
                     type: Type.OBJECT,
                     properties: {
                         sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"] },
-                        sentimentScore: { type: Type.NUMBER },
+                        sentimentScore: { 
+                            type: Type.NUMBER,
+                            description: "An integer between 0 and 100 representing the sentiment intensity."
+                        },
                         summary: { type: Type.STRING }
                     },
                     required: ["sentiment", "sentimentScore", "summary"]
@@ -352,12 +357,13 @@ const AIAnalysisBlock = React.memo(({ predictions, symbol }: any) => {
                   <Info className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <span className={cn("text-sm font-bold", predictions.quantSignals.score > 0 ? 'text-green-500' : predictions.quantSignals.score < 0 ? 'text-red-500' : 'text-zinc-500')}>
-                {predictions.quantSignals.score > 0 ? '+' : ''}{predictions.quantSignals.score}
+              <span className={cn("text-sm font-bold transition-colors duration-500", predictions.quantSignals.score > 0 ? 'text-green-500' : predictions.quantSignals.score < 0 ? 'text-red-500' : 'text-zinc-500')}>
+                {predictions.quantSignals.score > 0 ? '+' : ''}{Math.round(predictions.quantSignals.score)}
               </span>
           </div>
-          <div className="w-full h-2.5 rounded-full bg-gradient-to-r from-red-500 via-zinc-300 to-green-500 relative">
-             <div className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-zinc-900 rounded-full shadow-sm" style={{ left: `calc(${((predictions.quantSignals.score + 100) / 200) * 100}% - 8px)` }}></div>
+          <div className="w-full h-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 relative overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700">
+             <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-red-500 via-zinc-400 to-green-500 opacity-20 w-full" />
+             <div className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-zinc-900 dark:border-zinc-200 rounded-full shadow-md transition-all duration-700 ease-out" style={{ left: `calc(${((Math.round(predictions.quantSignals.score) + 100) / 200) * 100}% - 8px)` }}></div>
           </div>
 
           {showMethodology && (
@@ -462,12 +468,12 @@ const NewsSentimentBlock = React.memo(({ newsData, symbol }: any) => {
               <div className="flex justify-between items-end mb-1 text-xs font-semibold text-zinc-500 uppercase tracking-wider">
                 <span>Overall Market Sentiment</span>
                 <span className={cn("text-sm font-bold", (displayData.sentiment || 'neutral') === 'positive' ? 'text-green-500' : (displayData.sentiment || 'neutral') === 'negative' ? 'text-red-500' : 'text-zinc-500')}>
-                  {displayData.sentimentScore ?? 50}/100 ({(displayData.sentiment || 'neutral').toUpperCase()})
+                  {displayData.sentimentScore ? (displayData.sentimentScore <= 1 ? Math.round(displayData.sentimentScore * 100) : Math.round(displayData.sentimentScore)) : 50}/100 ({(displayData.sentiment || 'neutral').toUpperCase()})
                 </span>
               </div>
-              <div className="w-full h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 relative overflow-hidden">
+              <div className="w-full h-2 rounded-full bg-zinc-100 dark:bg-zinc-800 relative overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700">
                  <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-red-500 via-zinc-400 to-green-500 opacity-20 w-full" />
-                 <div className="absolute top-0 bottom-0 w-1 bg-zinc-900 dark:bg-white transition-all duration-1000 z-10" style={{ left: `${displayData.sentimentScore ?? 50}%`, transform: 'translateX(-50%)' }} />
+                 <div className="absolute top-0 bottom-0 w-1 bg-zinc-900 dark:bg-white transition-all duration-1000 z-10" style={{ left: `${displayData.sentimentScore ? (displayData.sentimentScore <= 1 ? displayData.sentimentScore * 100 : displayData.sentimentScore) : 50}%`, transform: 'translateX(-50%)' }} />
               </div>
            </div>
            
@@ -596,7 +602,12 @@ export default function Dashboard() {
       });
       
       fetch(`/api/news/${symbol}`).then(r => r.json()).then(async (nData) => {
-          setNewsData(nData);
+          setNewsData({
+            news: nData.news || [],
+            sentimentScore: 50,
+            sentiment: 'neutral',
+            summary: "AI Sentiment analysis is being calculated..."
+          });
       }).catch(console.error);
       
     } catch(err: any) { setError(err.message); } finally { 
@@ -609,9 +620,20 @@ export default function Dashboard() {
   const combinedData = useMemo(() => {
     const combined = [...chartSource.history];
     if (chartSource.predictions && chartSource.predictions.futurePoints && chartSource.history.length > 0) {
-      combined[combined.length - 1] = { ...combined[combined.length - 1], predictedClose: combined[combined.length - 1].close };
+      combined[combined.length - 1] = { 
+        ...combined[combined.length - 1], 
+        predictedClose: combined[combined.length - 1].close,
+        uncertaintyHigh: combined[combined.length - 1].close,
+        uncertaintyLow: combined[combined.length - 1].close
+      };
       chartSource.predictions.futurePoints.forEach((fp: any) => {
-        combined.push({ date: format(new Date(fp.date), 'MMM dd'), predictedClose: fp.predictedClose, isFuture: true });
+        combined.push({ 
+          date: format(new Date(fp.date), 'MMM dd'), 
+          predictedClose: fp.predictedClose, 
+          uncertaintyHigh: fp.uncertaintyHigh,
+          uncertaintyLow: fp.uncertaintyLow,
+          isFuture: true 
+        });
       });
     }
     return combined;
@@ -691,6 +713,7 @@ export default function Dashboard() {
                      <linearGradient id="colorPrediction" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="#8B5CF6" stopOpacity={0.8}/><stop offset="100%" stopColor="#D946EF" stopOpacity={1}/></linearGradient>
                      <linearGradient id="cloudUp" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.1}/><stop offset="95%" stopColor="#22c55e" stopOpacity={0}/></linearGradient>
                      <linearGradient id="cloudDown" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.1}/><stop offset="95%" stopColor="#ef4444" stopOpacity={0}/></linearGradient>
+                     <linearGradient id="uncertaintyGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8B5CF6" stopOpacity={0.15}/><stop offset="100%" stopColor="#8B5CF6" stopOpacity={0.02}/></linearGradient>
                    </defs>
                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#52525B" opacity={0.2} />
                    <XAxis dataKey="date" tick={{ fontSize: 12, fill: '#71717A' }} tickLine={false} axisLine={false} minTickGap={40} />
@@ -698,8 +721,11 @@ export default function Dashboard() {
                    <Tooltip contentStyle={{ backgroundColor: '#18181B', borderColor: '#27272A', color: '#fff', borderRadius: '8px' }} itemStyle={{ color: '#E4E4E7' }} formatter={(value: any, name: string) => {
                      const numVal = Array.isArray(value) ? value[1] : value;
                      if (numVal == null || isNaN(numVal)) return null;
+                     
                      const nameMap: any = {
                         predictedClose: 'AI Forecast',
+                        uncertaintyHigh: 'Confidence Cap',
+                        uncertaintyLow: 'Confidence Floor',
                         candleRange: 'Market Price',
                         ichiTenkan: 'Tenkan-sen',
                         ichiKijun: 'Kijun-sen',
@@ -711,6 +737,9 @@ export default function Dashboard() {
                         bbMiddle: 'BB Middle',
                         bbLower: 'BB Lower'
                      };
+                     
+                     if (name === 'uncertaintyHigh' || name === 'uncertaintyLow') return null;
+                     
                      return [`₹${Number(numVal).toFixed(2)}`, nameMap[name] || name];
                    }} />
                    
@@ -735,6 +764,20 @@ export default function Dashboard() {
                    <Bar dataKey="candleRange" shape={<CustomCandlestick />} name="Market Price" isAnimationActive={false} />
                    <Line type="monotone" dataKey="sma20" stroke="#60a5fa" strokeWidth={1} strokeOpacity={0.6} dot={false} name="SMA 20" />
                    <Line type="monotone" dataKey="sma50" stroke="#fbbf24" strokeWidth={1} strokeOpacity={0.6} dot={false} name="SMA 50" />
+                   
+                   <Area 
+                     type="monotone" 
+                     dataKey="uncertaintyHigh" 
+                     // @ts-ignore
+                     baseValue="uncertaintyLow" 
+                     stroke="none" 
+                     fill="url(#uncertaintyGradient)" 
+                     fillOpacity={1} 
+                     isAnimationActive={false} 
+                     connectNulls={true} 
+                     name="Confidence Band"
+                   />
+
                    <Line type="monotone" dataKey="predictedClose" stroke="url(#colorPrediction)" strokeWidth={4} strokeDasharray="6 4" dot={{ r: 3, fill: "#A855F7", stroke: "#fff", strokeWidth: 1 }} activeDot={{ r: 7, fill: "#C084FC" }} name="predictedClose" connectNulls={true} filter="drop-shadow(0px 0px 4px rgba(168,85,247,0.8))" />
                  
                  {chartSource.predictions && combinedData.length > chartSource.history.length && (

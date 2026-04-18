@@ -131,13 +131,16 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
         period1.setFullYear(now.getFullYear() - 1);
 
         const chartData: any = await yahooFinance.chart(symbol, { period1: period1.toISOString(), interval: '1d' });
-        const rawData: any[] = (chartData.quotes || []).filter((q: any) => q.close != null);
-        if (rawData.length < 50) return res.json({ error: "Not enough data" });
+        const rawData: any[] = (chartData.quotes || []);
+        const filteredData = rawData.filter(d => d.close != null && d.open != null && d.high != null && d.low != null);
+        
+        if (filteredData.length < 50) return res.json({ error: "Not enough valid data" });
 
-        const closes = rawData.map(d => d.close);
-        const highs = rawData.map(d => d.high).filter(h => h != null);
-        const lows = rawData.map(d => d.low).filter(l => l != null);
-        const opens = rawData.map(d => d.open).filter(o => o != null);
+        const closes = filteredData.map(d => d.close);
+        const highs = filteredData.map(d => d.high);
+        const lows = filteredData.map(d => d.low);
+        const opens = filteredData.map(d => d.open);
+        const volumes = filteredData.map(d => d.volume);
         
         let quantScore = 0;
         let detectedSignals: any[] = [];
@@ -181,14 +184,39 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
                 else if (currentClose < cloudBottom) quantScore -= 30;
             }
 
-            if (currentMacd && currentMacd.MACD > currentMacd.signal) { quantScore += 15; detectedSignals.push({ name: 'MACD Bullish', impact: 'bullish' }); }
-            else { quantScore -= 15; detectedSignals.push({ name: 'MACD Bearish', impact: 'bearish' }); }
+            if (currentMacd && typeof currentMacd.MACD === 'number' && typeof currentMacd.signal === 'number') {
+                const macdGap = currentMacd.MACD - currentMacd.signal;
+                if (macdGap > 0) { quantScore += 15; detectedSignals.push({ name: 'MACD Bullish Momentum', impact: 'bullish' }); }
+                else { quantScore -= 15; detectedSignals.push({ name: 'MACD Bearish Pressure', impact: 'bearish' }); }
+            }
 
             const last5 = { open: opens.slice(-5), high: highs.slice(-5), low: lows.slice(-5), close: closes.slice(-5) };
             if (bullishengulfingpattern(last5)) { quantScore += 25; detectedSignals.push({ name: 'Bullish Engulfing', impact: 'bullish' }); }
             if (bearishengulfingpattern(last5)) { quantScore -= 25; detectedSignals.push({ name: 'Bearish Engulfing', impact: 'bearish' }); }
             if (hammerpattern(last5)) { quantScore += 15; detectedSignals.push({ name: 'Hammer Pattern', impact: 'bullish' }); }
             if (shootingstar(last5)) { quantScore -= 15; detectedSignals.push({ name: 'Shooting Star', impact: 'bearish' }); }
+
+            // Moving Average Speed
+            const ma20 = SMA.calculate({ values: closes, period: 20 });
+            const ma50 = SMA.calculate({ values: closes, period: 50 });
+            const lastMa20 = ma20[ma20.length - 1];
+            const lastMa50 = ma50[ma50.length - 1];
+            if (lastMa20 > lastMa50) {
+                quantScore += 20; 
+                if (ma20[ma20.length - 2] <= ma50[ma50.length - 2]) {
+                    detectedSignals.push({ name: 'Golden Cross (Major)', impact: 'bullish' });
+                    quantScore += 20;
+                }
+            } else {
+                quantScore -= 15;
+            }
+
+            // ADX Trend Strength weight
+            if (currentAdx && currentAdx.adx > 25) {
+                const trendDir = closes[closes.length - 1] > closes[closes.length - 20] ? 1 : -1;
+                quantScore += (trendDir * 10);
+                detectedSignals.push({ name: `Strong ${trendDir > 0 ? 'Bullish' : 'Bearish'} Trend (ADX)`, impact: trendDir > 0 ? 'bullish' : 'bearish' });
+            }
 
             // Ensemble AR-I-MA-Prophet Engine (60-Day Horizon)
             const recentDataFiltered = rawData.slice(-120).filter(d => d.close != null);
@@ -361,7 +389,9 @@ app.get('/api/ml/predict/:symbol', async (req, res) => {
 
                 futurePoints.push({ 
                     date: fDate.toISOString(), 
-                    predictedClose: parseFloat(predictedClose.toFixed(2)) 
+                    predictedClose: parseFloat(predictedClose.toFixed(2)),
+                    uncertaintyHigh: parseFloat((predictedClose * (1 + (variance * 2.0))).toFixed(2)),
+                    uncertaintyLow: parseFloat((predictedClose * (1 - (variance * 2.0))).toFixed(2))
                 });
             }
 
