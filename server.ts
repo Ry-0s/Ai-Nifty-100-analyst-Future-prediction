@@ -25,9 +25,17 @@ try {
     // In packaged Electron, paths are relative to resourcesPath
     if (process.env.ELECTRON === 'true') {
         const resPath = process.env.RESOURCES_PATH || '';
+        let unpackedPath = resPath;
+        if (resPath.endsWith('.asar')) {
+            unpackedPath = resPath + '.unpacked';
+        }
+
         const potentialPaths = [
             path.join(resPath, 'synthetic_training_data.json'),
-            path.join(resPath, 'app', 'synthetic_training_data.json')
+            path.join(resPath, 'app', 'synthetic_training_data.json'),
+            path.join(unpackedPath, 'synthetic_training_data.json'),
+            path.join(unpackedPath, 'app', 'synthetic_training_data.json'),
+            path.join(process.cwd(), 'synthetic_training_data.json')
         ];
         for (const p of potentialPaths) {
             if (fs.existsSync(p)) {
@@ -670,13 +678,27 @@ async function startServer() {
     
     if (process.env.ELECTRON === 'true') {
         const resPath = process.env.RESOURCES_PATH || '';
+        // Handle asar.unpacked folder if it exists
+        let unpackedPath = resPath;
+        if (resPath.endsWith('.asar')) {
+            unpackedPath = resPath + '.unpacked';
+        }
+
         // If we are already in the dist folder, distPath is just cwd
         if (process.cwd().includes('dist')) {
             distPath = process.cwd();
         } else {
-            const electronDist = path.join(resPath, 'app', 'dist');
-            if (fs.existsSync(electronDist)) {
-                distPath = electronDist;
+            const potentialDistPaths = [
+                path.join(unpackedPath, 'app', 'dist'),
+                path.join(unpackedPath, 'dist'),
+                path.join(process.cwd(), 'dist')
+            ];
+
+            for (const p of potentialDistPaths) {
+                if (fs.existsSync(path.join(p, 'index.html'))) {
+                    distPath = p;
+                    break;
+                }
             }
         }
     }

@@ -32,9 +32,15 @@ function createSplashScreen() {
 function startBackendServer() {
   return new Promise((resolve, reject) => {
     // In production, we run the compiled server.cjs
+    // When using asarUnpack, files are in .unpacked folder
+    let appPath = app.getAppPath();
+    if (appPath.endsWith('.asar')) {
+      appPath = appPath + '.unpacked';
+    }
+    
     const serverPath = isDev
       ? path.join(__dirname, '..', 'server.ts')
-      : path.join(process.resourcesPath, 'app', 'dist', 'server.cjs');
+      : path.join(appPath, 'dist', 'server.cjs');
 
     // Set environment variables for the server
     const env = {
@@ -43,6 +49,7 @@ function startBackendServer() {
       NODE_ENV: 'production',
       ELECTRON: 'true',
       RESOURCES_PATH: process.resourcesPath,
+      ELECTRON_RUN_AS_NODE: '1', // CRITICAL: Tells Electron to act like Node.js for this process
     };
 
     if (isDev) {
@@ -55,13 +62,10 @@ function startBackendServer() {
     console.log('Starting production server at:', serverPath);
 
     // In production, spawn the compiled server
-    // Note: We use the Electron's node via process.execPath or a sidecar approach.
-    // electron-builder usually packages the app such that we can use 'node' if it's in the path, 
-    // or we can try to use electron's internal node.
     serverProcess = spawn(process.execPath, [serverPath], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: path.dirname(serverPath),
+      cwd: app.getAppPath(),
     });
 
     serverProcess.stdout.on('data', (data) => {
@@ -73,7 +77,12 @@ function startBackendServer() {
     });
 
     serverProcess.stderr.on('data', (data) => {
-      console.error('[Server Error]', data.toString());
+      const errOutput = data.toString();
+      console.error('[Server Error]', errOutput);
+      // Even if there's an error (like a warning), if it's already listening we resolve
+      if (errOutput.includes('Server running') || errOutput.includes('listening')) {
+        resolve();
+      }
     });
 
     serverProcess.on('error', (err) => {
