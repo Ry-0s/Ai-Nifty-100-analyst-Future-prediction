@@ -113,26 +113,45 @@ function createWindow() {
   });
 
   // Load the app
+  const loadURL = () => {
+    mainWindow.loadURL(`http://localhost:${SERVER_PORT}`).catch(err => {
+      console.error('Initial load failed, will retry in 2s...', err);
+      setTimeout(loadURL, 2000);
+    });
+  };
+
   if (isDev) {
     // In dev, load from Vite dev server
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load the built frontend served by Express
-    mainWindow.loadURL(`http://localhost:${SERVER_PORT}`).catch(err => {
-      console.error('Initial load failed, will retry in 2s...', err);
-      setTimeout(() => {
-        mainWindow.loadURL(`http://localhost:${SERVER_PORT}`);
-      }, 2000);
-    });
+    loadURL();
 
     // Helpful for debugging production "black screen" issues
-    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      console.error('Page failed to load:', errorCode, errorDescription);
-      if (!isDev) {
-        setTimeout(() => mainWindow.loadURL(`http://localhost:${SERVER_PORT}`), 3000);
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error('Page failed to load:', errorCode, errorDescription, validatedURL);
+      // If it's a connection error, retry
+      if (errorCode === -102 || errorCode === -105 || errorCode === -300) {
+        setTimeout(loadURL, 3000);
       }
     });
+
+    // If we've been on a black screen for too long, force a reload
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.webContents.isLoading() && mainWindow.isVisible()) {
+          // Check if we actually loaded something
+          mainWindow.webContents.executeJavaScript('window.document.body.innerText').then(text => {
+              if (!text || text.trim().length === 0) {
+                  console.log('Detected empty screen, forcing reload...');
+                  loadURL();
+              }
+          }).catch(() => {
+              console.log('App not responsive, forcing reload...');
+              loadURL();
+          });
+      }
+    }, 10000);
   }
 
   // Show window when ready (avoids white flash)
