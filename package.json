@@ -1,7 +1,7 @@
 {
   "name": "nifty-100-ai-predictor",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.8",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -69,11 +69,7 @@
       "dist/**/*",
       "synthetic_training_data.json"
     ],
-    "asar": true,
-    "asarUnpack": [
-      "dist/**/*",
-      "node_modules/@tensorflow/tfjs-node/**/*"
-    ],
+    "asar": false,
     "extraResources": [
       {
         "from": "synthetic_training_data.json",

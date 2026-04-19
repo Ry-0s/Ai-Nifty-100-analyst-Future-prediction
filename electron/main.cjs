@@ -1,6 +1,7 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const fs = require('fs');
 
 // Determine if we're in development or production (packaged)
 const isDev = !app.isPackaged;
@@ -32,12 +33,7 @@ function createSplashScreen() {
 function startBackendServer() {
   return new Promise((resolve, reject) => {
     // In production, we run the compiled server.cjs
-    // When using asarUnpack, files are in .unpacked folder
-    let appPath = app.getAppPath();
-    if (appPath.endsWith('.asar')) {
-      appPath = appPath + '.unpacked';
-    }
-    
+    const appPath = app.getAppPath();
     const serverPath = isDev
       ? path.join(__dirname, '..', 'server.ts')
       : path.join(appPath, 'dist', 'server.cjs');
@@ -60,6 +56,14 @@ function startBackendServer() {
     }
 
     console.log('Starting production server at:', serverPath);
+
+    if (!isDev && !fs.existsSync(serverPath)) {
+        const msg = `Critical Error: Server file not found at ${serverPath}. The application might have been installed incorrectly.`;
+        console.error(msg);
+        dialog.showErrorBox('Backend Launch Failure', msg);
+        reject(new Error('Server missing'));
+        return;
+    }
 
     // In production, spawn the compiled server
     serverProcess = spawn(process.execPath, [serverPath], {
