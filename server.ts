@@ -20,8 +20,26 @@ const samplesCache = new Map<string, number>();
 // Load synthetic data once at startup
 let syntheticData: any[] = [];
 try {
-    const raw = fs.readFileSync('./synthetic_training_data.json', 'utf8');
-    syntheticData = JSON.parse(raw);
+    let syntheticPath = path.join(process.cwd(), 'synthetic_training_data.json');
+    
+    // In packaged Electron, paths are relative to resourcesPath
+    if (process.env.ELECTRON === 'true') {
+        const potentialPaths = [
+            path.join(process.resourcesPath, 'synthetic_training_data.json'),
+            path.join(process.resourcesPath, 'app', 'synthetic_training_data.json')
+        ];
+        for (const p of potentialPaths) {
+            if (fs.existsSync(p)) {
+                syntheticPath = p;
+                break;
+            }
+        }
+    }
+
+    if (fs.existsSync(syntheticPath)) {
+        const raw = fs.readFileSync(syntheticPath, 'utf8');
+        syntheticData = JSON.parse(raw);
+    }
 } catch (e) {
     console.error("Failed to load synthetic data:", e);
 }
