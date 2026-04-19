@@ -666,24 +666,34 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Production / Electron configuration
-    // In Electron process.resourcesPath is where packaged assets live
     let distPath = path.join(process.cwd(), 'dist');
     
     if (process.env.ELECTRON === 'true') {
         const resPath = process.env.RESOURCES_PATH || '';
-        const electronDist = path.join(resPath, 'app', 'dist');
-        if (fs.existsSync(electronDist)) {
-            distPath = electronDist;
+        // If we are already in the dist folder, distPath is just cwd
+        if (process.cwd().includes('dist')) {
+            distPath = process.cwd();
+        } else {
+            const electronDist = path.join(resPath, 'app', 'dist');
+            if (fs.existsSync(electronDist)) {
+                distPath = electronDist;
+            }
         }
     }
 
-    console.log(`Serving static files from: ${distPath}`);
+    console.log(`[Backend] Serving UI from: ${distPath}`);
     app.use(express.static(distPath));
+    
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api')) {
           return next();
       }
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+      } else {
+          res.status(404).send(`UI not found at: ${indexPath}`);
+      }
     });
   }
 

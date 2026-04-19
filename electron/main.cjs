@@ -110,7 +110,20 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   } else {
     // In production, load the built frontend served by Express
-    mainWindow.loadURL(`http://localhost:${SERVER_PORT}`);
+    mainWindow.loadURL(`http://localhost:${SERVER_PORT}`).catch(err => {
+      console.error('Initial load failed, will retry in 2s...', err);
+      setTimeout(() => {
+        mainWindow.loadURL(`http://localhost:${SERVER_PORT}`);
+      }, 2000);
+    });
+
+    // Helpful for debugging production "black screen" issues
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+      console.error('Page failed to load:', errorCode, errorDescription);
+      if (!isDev) {
+        setTimeout(() => mainWindow.loadURL(`http://localhost:${SERVER_PORT}`), 3000);
+      }
+    });
   }
 
   // Show window when ready (avoids white flash)
