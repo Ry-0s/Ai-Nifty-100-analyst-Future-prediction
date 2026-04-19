@@ -1,11 +1,10 @@
 import http from 'http';
 
-http.get('http://localhost:3000/api/ml/predict/^NSEI', (res) => {
+http.get('http://localhost:3000/api/ml/predict/RELIANCE.NS', (res) => {
   let data = '';
-  res.on('data', chunk => { data += chunk; });
+  res.on('data', chunk => data += chunk);
   res.on('end', () => {
-    console.log(data);
+    const parsed = JSON.parse(data);
+    console.log(JSON.stringify(parsed.quantSignals, null, 2));
   });
-}).on('error', (err) => {
-  console.log("Error: " + err.message);
 });

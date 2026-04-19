@@ -2,14 +2,29 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import YahooFinance from 'yahoo-finance2';
-import { linearRegression, linearRegressionLine } from 'simple-statistics';
+import { linearRegression } from 'simple-statistics';
+import * as tf from '@tensorflow/tfjs-node';
+import fs from 'fs';
 import { 
-  RSI, MACD, SMA, stochastic, CCI, ADX, BollingerBands,
-  bullishengulfingpattern, bearishengulfingpattern, morningstar, eveningstar,
-  threeblackcrows, threewhitesoldiers, IchimokuCloud, StochasticRSI
+  RSI, MACD, SMA, StochasticRSI, BollingerBands, ADX, ATR, CCI, IchimokuCloud,
+  bullishengulfingpattern, bearishengulfingpattern, morningstar, eveningstar
 } from 'technicalindicators';
 
 const yahooFinance = new YahooFinance();
+const tfModelCache = new Map<string, tf.Sequential>();
+const isTrainingCache = new Map<string, boolean>();
+const lastTrainedCache = new Map<string, number>();
+const lastLossCache = new Map<string, number>();
+const samplesCache = new Map<string, number>();
+
+// Load synthetic data once at startup
+let syntheticData: any[] = [];
+try {
+    const raw = fs.readFileSync('./synthetic_training_data.json', 'utf8');
+    syntheticData = JSON.parse(raw);
+} catch (e) {
+    console.error("Failed to load synthetic data:", e);
+}
 
 async function startServer() {
   const app = express();
@@ -20,28 +35,107 @@ async function startServer() {
   // NIFTY 100 sample + Global valid symbols
   const SYMBOLS = [
     { symbol: '^NSEI', name: 'NIFTY 50 Index' },
+    { symbol: '^NSEBANK', name: 'NIFTY Bank Index' },
     { symbol: 'RELIANCE.NS', name: 'Reliance Industries' },
     { symbol: 'TCS.NS', name: 'Tata Consultancy Services' },
     { symbol: 'HDFCBANK.NS', name: 'HDFC Bank' },
-    { symbol: 'INFY.NS', name: 'Infosys' },
     { symbol: 'ICICIBANK.NS', name: 'ICICI Bank' },
-    { symbol: 'SBIN.NS', name: 'State Bank of India' },
+    { symbol: 'INFY.NS', name: 'Infosys' },
     { symbol: 'BHARTIARTL.NS', name: 'Bharti Airtel' },
+    { symbol: 'SBIN.NS', name: 'State Bank of India' },
+    { symbol: 'LICI.NS', name: 'Life Insurance Corp' },
     { symbol: 'ITC.NS', name: 'ITC Limited' },
-    { symbol: 'LT.NS', name: 'Larsen & Toubro' },
-    { symbol: 'ADANIENT.NS', name: 'Adani Enterprises' },
-    { symbol: 'BAJFINANCE.NS', name: 'Bajaj Finance' },
-    { symbol: 'COALINDIA.NS', name: 'Coal India' },
-    { symbol: 'SUNPHARMA.NS', name: 'Sun Pharma' },
-    { symbol: 'TATAMOTORS.NS', name: 'Tata Motors' },
     { symbol: 'HINDUNILVR.NS', name: 'Hindustan Unilever' },
+    { symbol: 'LT.NS', name: 'Larsen & Toubro' },
+    { symbol: 'BAJFINANCE.NS', name: 'Bajaj Finance' },
+    { symbol: 'KOTAKBANK.NS', name: 'Kotak Mahindra Bank' },
+    { symbol: 'ADANIENT.NS', name: 'Adani Enterprises' },
+    { symbol: 'SUNPHARMA.NS', name: 'Sun Pharma' },
     { symbol: 'AXISBANK.NS', name: 'Axis Bank' },
+    { symbol: 'TITAN.NS', name: 'Titan Company' },
+    { symbol: 'ULTRACEMCO.NS', name: 'UltraTech Cement' },
     { symbol: 'ADANIPORTS.NS', name: 'Adani Ports' },
     { symbol: 'ASIANPAINT.NS', name: 'Asian Paints' },
-    { symbol: 'KOTAKBANK.NS', name: 'Kotak Mahindra Bank' },
+    { symbol: 'COALINDIA.NS', name: 'Coal India' },
+    { symbol: 'MARUTI.NS', name: 'Maruti Suzuki' },
+    { symbol: 'BAJAJFINSV.NS', name: 'Bajaj Finserv' },
+    { symbol: 'POWERGRID.NS', name: 'Power Grid' },
+    { symbol: 'NTPC.NS', name: 'NTPC Limited' },
+    { symbol: 'TATASTEEL.NS', name: 'Tata Steel' },
+    { symbol: 'M&M.NS', name: 'Mahindra & Mahindra' },
+    { symbol: 'HCLTECH.NS', name: 'HCL Technologies' },
+    { symbol: 'TATAMOTORS.NS', name: 'Tata Motors' },
+    { symbol: 'ADANIPOWER.NS', name: 'Adani Power' },
+    { symbol: 'INDUSINDBK.NS', name: 'IndusInd Bank' },
+    { symbol: 'SBILIFE.NS', name: 'SBI Life Insurance' },
+    { symbol: 'JSWSTEEL.NS', name: 'JSW Steel' },
+    { symbol: 'GRASIM.NS', name: 'Grasim Industries' },
+    { symbol: 'HINDALCO.NS', name: 'Hindalco' },
+    { symbol: 'NESTLEIND.NS', name: 'Nestle India' },
+    { symbol: 'BAJAJ-AUTO.NS', name: 'Bajaj Auto' },
+    { symbol: 'WIPRO.NS', name: 'Wipro Limited' },
+    { symbol: 'ONGC.NS', name: 'ONGC' },
+    { symbol: 'APOLLOHOSP.NS', name: 'Apollo Hospitals' },
+    { symbol: 'DRREDDY.NS', name: 'Dr. Reddys Labs' },
+    { symbol: 'ADANIGREEN.NS', name: 'Adani Green Energy' },
+    { symbol: 'LTIM.NS', name: 'LTIMindtree' },
+    { symbol: 'DIVISLAB.NS', name: 'Divis Labs' },
+    { symbol: 'EICHERMOT.NS', name: 'Eicher Motors' },
+    { symbol: 'BPCL.NS', name: 'BPCL' },
+    { symbol: 'HDFCLIFE.NS', name: 'HDFC Life' },
+    { symbol: 'ADANIENSOL.NS', name: 'Adani Energy Sol' },
+    { symbol: 'TATACONSUM.NS', name: 'Tata Consumer' },
+    { symbol: 'SHREECEM.NS', name: 'Shree Cement' },
+    { symbol: 'BRITANNIA.NS', name: 'Britannia Ind' },
+    { symbol: 'CIPLA.NS', name: 'Cipla Limited' },
+    { symbol: 'HEROMOTOCO.NS', name: 'Hero MotoCorp' },
+    { symbol: 'TECHM.NS', name: 'Tech Mahindra' },
+    { symbol: 'UPL.NS', name: 'UPL Limited' },
+    { symbol: 'JINDALSTEL.NS', name: 'Jindal Steel' },
+    { symbol: 'TATAELXSI.NS', name: 'Tata Elxsi' },
+    { symbol: 'ICICIPRULI.NS', name: 'ICICI Prulife' },
+    { symbol: 'HAVELLS.NS', name: 'Havells India' },
+    { symbol: 'GAIL.NS', name: 'GAIL India' },
+    { symbol: 'PIDILITIND.NS', name: 'Pidilite Ind' },
+    { symbol: 'VBL.NS', name: 'Varun Beverages' },
+    { symbol: 'AMBUJACEM.NS', name: 'Ambuja Cements' },
+    { symbol: 'IOC.NS', name: 'Indian Oil' },
+    { symbol: 'SIEMENS.NS', name: 'Siemens' },
+    { symbol: 'ABB.NS', name: 'ABB India' },
+    { symbol: 'BEL.NS', name: 'Bharat Electronics' },
+    { symbol: 'BHEL.NS', name: 'BHEL' },
+    { symbol: 'IRCTC.NS', name: 'IRCTC' },
+    { symbol: 'POLYCAB.NS', name: 'Polycab India' },
+    { symbol: 'HAL.NS', name: 'Hindustan Aeronautics' },
+    { symbol: 'TRENT.NS', name: 'Trent Limited' },
+    { symbol: 'CHOLAFIN.NS', name: 'Cholamandalam' },
+    { symbol: 'DLF.NS', name: 'DLF Limited' },
+    { symbol: 'LODHA.NS', name: 'Macrotech Developers' },
+    { symbol: 'CANBK.NS', name: 'Canara Bank' },
+    { symbol: 'PNB.NS', name: 'Punjab National Bank' },
+    { symbol: 'BANKBARODA.NS', name: 'Bank of Baroda' },
+    { symbol: 'IDFCFIRSTB.NS', name: 'IDFC First Bank' },
+    { symbol: 'YESBANK.NS', name: 'Yes Bank' },
+    { symbol: 'ZOMATO.NS', name: 'Zomato Limited' },
+    { symbol: 'PAYTM.NS', name: 'Paytm' },
+    { symbol: 'NYKAA.NS', name: 'FSN E-Commerce' },
+    { symbol: 'DELHIVERY.NS', name: 'Delhivery' },
+    { symbol: 'POLICYBZR.NS', name: 'PB Fintech' },
+    { symbol: 'GODREJCP.NS', name: 'Godrej Consumer' },
+    { symbol: 'DABUR.NS', name: 'Dabur India' },
+    { symbol: 'MARICO.NS', name: 'Marico Limited' },
+    { symbol: 'BERGEPAINT.NS', name: 'Berger Paints' },
+    { symbol: 'COLPAL.NS', name: 'Colgate-Palmolive' },
+    { symbol: 'TATACOMM.NS', name: 'Tata Communications' },
+    { symbol: 'PERSISTENT.NS', name: 'Persistent Systems' },
+    { symbol: 'DIXON.NS', name: 'Dixon Tech' },
+    { symbol: 'MPHASIS.NS', name: 'Mphasis Limited' },
     { symbol: 'AAPL', name: 'Apple Inc.' },
     { symbol: 'TSLA', name: 'Tesla Inc.' },
     { symbol: 'NVDA', name: 'Nvidia Corp.' },
+    { symbol: 'MSFT', name: 'Microsoft Corp.' },
+    { symbol: 'GOOGL', name: 'Alphabet Inc.' },
+    { symbol: 'AMZN', name: 'Amazon.com Inc.' },
   ];
 
   app.get('/api/stocks', (req, res) => {
@@ -50,16 +144,43 @@ async function startServer() {
 
   app.get('/api/search', async (req, res) => {
     try {
-      const q = req.query.q as string;
+      const q = (req.query.q as string || '').toUpperCase();
       if (!q) return res.json([]);
+
+      // 1. Instant Local Match
+      const localMatches = SYMBOLS.filter(s => 
+          s.symbol.includes(q) || s.name.toUpperCase().includes(q)
+      ).slice(0, 10);
+
+      // If we have good local results and query is short, return fast
+      if (localMatches.length > 3 && q.length < 5) {
+          return res.json(localMatches);
+      }
+
+      // 2. Fallback to Global Yahoo Search
       const searchResult = await yahooFinance.search(q);
-      const quotes = searchResult.quotes
+      const quotes = (searchResult.quotes || [])
         .filter(q => q.quoteType === 'EQUITY' || q.quoteType === 'INDEX' || q.quoteType === 'ETF')
-        .slice(0, 8);
-      res.json(quotes);
+        .map(q => ({
+            symbol: q.symbol,
+            name: q.shortname || q.longname || q.symbol
+        }));
+      
+      // Merge unique
+      const merged = [...localMatches];
+      quotes.forEach(ext => {
+          if (!merged.find(m => m.symbol === (ext as any).symbol)) merged.push(ext as any);
+      });
+      
+      res.json(merged.slice(0, 12));
     } catch (e: any) {
       console.error('Search error:', e.message);
-      res.status(500).json({ error: e.message });
+      // If global search fails, just return local matches to avoid breaking the UI
+      const q = (req.query.q as string || '').toUpperCase();
+      const fallbackMatches = SYMBOLS.filter(s => 
+          s.symbol.includes(q) || s.name.toUpperCase().includes(q)
+      ).slice(0, 12);
+      res.json(fallbackMatches);
     }
   });
 
@@ -82,21 +203,48 @@ async function startServer() {
       const { symbol } = req.params;
       const { interval = '1d', range = '1y' } = req.query;
 
-      // Map range to period1
-      const queryOptions: any = { interval };
+      // Calculate period1 based on range
       const now = new Date();
-      let period1 = new Date();
+      let period1Date = new Date();
       
-      if (range === '1mo') period1.setMonth(now.getMonth() - 1);
-      else if (range === '3mo') period1.setMonth(now.getMonth() - 3);
-      else if (range === '6mo') period1.setMonth(now.getMonth() - 6);
-      else if (range === '1y') period1.setFullYear(now.getFullYear() - 1);
-      else if (range === '5y') period1.setFullYear(now.getFullYear() - 5);
-      
-      queryOptions.period1 = period1.toISOString();
+      if (range === '1mo') period1Date.setMonth(now.getMonth() - 1);
+      else if (range === '3mo') period1Date.setMonth(now.getMonth() - 3);
+      else if (range === '6mo') period1Date.setMonth(now.getMonth() - 6);
+      else if (range === '1y') period1Date.setFullYear(now.getFullYear() - 1);
+      else if (range === '5y') period1Date.setFullYear(now.getFullYear() - 5);
+      else period1Date.setFullYear(now.getFullYear() - 1);
 
-      const chartData: any = await yahooFinance.chart(symbol, queryOptions);
+      // Validate interval to prevent InvalidOptionsError
+      const validIntervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo'];
+      const safeInterval = validIntervals.includes(interval as string) ? (interval as any) : '1d';
+
+      const queryOptions: any = { 
+        interval: safeInterval,
+        period1: Math.floor(period1Date.getTime() / 1000) // Seconds since epoch is most stable
+      };
+
+      let chartData: any;
+      try {
+        chartData = await yahooFinance.chart(symbol, queryOptions);
+      } catch (e: any) {
+        if (e.message.includes('No data found') || e.message.includes('delisted')) {
+          // Fallback: try with the smallest possible window
+          const fallbackPeriod = new Date();
+          fallbackPeriod.setMonth(fallbackPeriod.getMonth() - 1);
+          chartData = await yahooFinance.chart(symbol, { 
+            interval: '1d', 
+            period1: Math.floor(fallbackPeriod.getTime() / 1000) 
+          } as any);
+        } else {
+          throw e;
+        }
+      }
+
       const results: any[] = (chartData.quotes || []).filter((q: any) => q.close != null && q.open != null && q.high != null && q.low != null);
+      
+      if (results.length === 0) {
+        return res.status(404).json({ error: "Symbol not found or data unavailable for this range." });
+      }
       
       // Compute Indicators (SMA20, SMA50, Ichimoku, StochRSI)
       const closes = results.map(r => r.close);
@@ -145,410 +293,319 @@ async function startServer() {
   app.get('/api/ml/predict/:symbol', async (req, res) => {
     try {
         const { symbol } = req.params;
-        const now = new Date();
-        const period1 = new Date();
-        period1.setFullYear(now.getFullYear() - 1); // Get 1 year of data for training
 
-        const chartData: any = await yahooFinance.chart(symbol, {
-            period1: period1.toISOString(),
-            interval: '1d'
-        });
+        let chartData: any;
+        const period1_2y = new Date();
+        period1_2y.setFullYear(period1_2y.getFullYear() - 2);
+
+        try {
+            // Use period1 for ML prediction
+            chartData = await yahooFinance.chart(symbol, {
+                period1: Math.floor(period1_2y.getTime() / 1000),
+                interval: '1d'
+            } as any);
+        } catch (e: any) {
+             if (e.message.includes('No data found') || e.message.includes('delisted')) {
+                 // Try a shorter window if 2y fails
+                 const period1_1y = new Date();
+                 period1_1y.setFullYear(period1_1y.getFullYear() - 1);
+                 chartData = await yahooFinance.chart(symbol, { 
+                    period1: Math.floor(period1_1y.getTime() / 1000), 
+                    interval: '1d' 
+                } as any);
+             } else {
+                 throw e;
+             }
+        }
+
         const rawData: any[] = chartData.quotes || [];
 
-        if (rawData.length < 50) {
-            return res.json({ error: "Not enough historical data for ML model." });
+        if (rawData.length < 100) {
+            return res.json({ error: "Not enough historical data for optimized ML model." });
         }
 
-        // Extraction arrays for Quantitative TA
         const filteredData = rawData.filter(d => d.close != null && d.open != null && d.high != null && d.low != null);
-        const closes = filteredData.map(d => d.close);
-        const highs = filteredData.map(d => d.high);
-        const lows = filteredData.map(d => d.low);
-        const opens = filteredData.map(d => d.open);
-        const volumes = filteredData.map(d => d.volume);
         
-        if (closes.length < 50) {
-            return res.json({ error: "Not enough valid historical data for analysis." });
+        // Merge with Synthetic Data for robustness
+        const mergedHistorical = [...filteredData];
+        if (syntheticData.length > 0) {
+            // Include up to 2500 synthetic points to provide sufficient regimen variation to the model
+            const subset = syntheticData.sort(() => 0.5 - Math.random()).slice(0, 2500);
+            subset.forEach(s => {
+                mergedHistorical.push({
+                    date: new Date(s.date),
+                    open: s.open, high: s.high, low: s.low, close: s.close, volume: s.volume
+                });
+            });
         }
+
+        const closes = mergedHistorical.map(d => d.close);
+        const highs = mergedHistorical.map(d => d.high);
+        const lows = mergedHistorical.map(d => d.low);
+        const opens = mergedHistorical.map(d => d.open);
+
+        const rsiValues = RSI.calculate({ values: closes, period: 14 });
+        const macdValues = MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
+        const bbValues = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
+        const sma20Values = SMA.calculate({ values: closes, period: 20 });
+        const atrValues = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
+        const cciValues = CCI.calculate({ high: highs, low: lows, close: closes, period: 20 });
         
-        // 1. Core Technical Indicators processing
-        let quantScore = 0; // -100 to 100 momentum matrix
+        const rsiFull = new Array(closes.length - rsiValues.length).fill(50).concat(rsiValues);
+        const macdFull = new Array(closes.length - macdValues.length).fill({ MACD: 0, signal: 0, histogram: 0 }).concat(macdValues);
+        const bbFull = new Array(closes.length - bbValues.length).fill({ upper: closes[0], lower: closes[0], middle: closes[0] }).concat(bbValues);
+        const sma20Full = new Array(closes.length - sma20Values.length).fill(closes[0]).concat(sma20Values);
+        const atrFull = new Array(closes.length - atrValues.length).fill(0).concat(atrValues);
+        const cciFull = new Array(closes.length - cciValues.length).fill(0).concat(cciValues);
+
+        const enrichedData = mergedHistorical.map((d, i) => ({
+            ...d,
+            rsi: rsiFull[i],
+            macd: macdFull[i].MACD - macdFull[i].signal,
+            bbPos: bbFull[i].upper === bbFull[i].lower ? 0.5 : (d.close - bbFull[i].lower) / (bbFull[i].upper - bbFull[i].lower),
+            smaDist: (d.close - sma20Full[i]) / sma20Full[i],
+            atr: atrFull[i],
+            cci: cciFull[i]
+        }));
+        
+        // Quant Momentum Matrix (Deterministic)
+        let quantScore = 0;
         let detectedSignals: Array<{name: string, impact: string}> = [];
+        const lastActual = enrichedData[enrichedData.length - 1];
         
-        // Advanced Regime Detection Variables
-        let currentRsi: any = 50;
-        let currentCci: any = 0;
-        let currentBB: any = null;
-        let currentAdx: any = { adx: 25 };
-        let currentIchimoku: any = null;
-        let currentStochRsi: any = null;
-        let volumeProfile = 1.0; 
-
         try {
-            const rsi = RSI.calculate({ values: closes, period: 14 });
-            const macd = MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9, SimpleMAOscillator: false, SimpleMASignal: false });
-            const stoch = stochastic({ high: highs, low: lows, close: closes, period: 14, signalPeriod: 3 });
-            const bb = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
-            const cci = CCI.calculate({ high: highs, low: lows, close: closes, period: 20 });
             const adx = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
-            const ichimoku = IchimokuCloud.calculate({
-                high: highs, low: lows,
-                conversionPeriod: 9, basePeriod: 26, spanPeriod: 52, displacement: 26
-            });
-            const stochRsi = StochasticRSI.calculate({
-                values: closes, rsiPeriod: 14, stochasticPeriod: 14, kPeriod: 3, dPeriod: 3
-            });
+            const currentAdx = adx[adx.length - 1];
+
+            if (lastActual.rsi < 35) { quantScore += 20; detectedSignals.push({ name: 'RSI Support', impact: 'bullish' }); }
+            else if (lastActual.rsi > 65) { quantScore -= 20; detectedSignals.push({ name: 'RSI Resistance', impact: 'bearish' }); }
             
-            currentRsi = rsi[rsi.length - 1];
-            const currentMacd = macd[macd.length - 1];
-            const currentStoch = stoch[stoch.length - 1];
-            currentBB = bb[bb.length - 1];
-            currentCci = cci[cci.length - 1];
-            currentAdx = adx[adx.length - 1];
-            currentIchimoku = ichimoku[ichimoku.length - 1];
-            currentStochRsi = stochRsi[stochRsi.length - 1];
-            const currentClose = closes[closes.length - 1];
-
-            // 1a. Ichimoku Cloud Regime Processing
-            if (currentIchimoku) {
-              const { spanA, spanB, conversion, base } = currentIchimoku;
-              const cloudTop = Math.max(spanA, spanB);
-              const cloudBottom = Math.min(spanA, spanB);
-
-              if (currentClose > cloudTop) {
-                  quantScore += 30; detectedSignals.push({ name: 'Price Above Ichimoku Cloud', impact: 'bullish' });
-              } else if (currentClose < cloudBottom) {
-                  quantScore -= 30; detectedSignals.push({ name: 'Price Below Ichimoku Cloud', impact: 'bearish' });
-              } else {
-                  detectedSignals.push({ name: 'Price Inside Ichimoku Cloud', impact: 'neutral' });
-              }
-
-              if (conversion > base) {
-                  quantScore += 15; detectedSignals.push({ name: 'TK Cross Bullish', impact: 'bullish' });
-              } else {
-                  quantScore -= 10; detectedSignals.push({ name: 'TK Cross Bearish', impact: 'bearish' });
-              }
+            if (currentAdx && currentAdx.adx > 25) {
+                const trendDir = closes[closes.length - 1] > closes[closes.length - 20] ? 1 : -1;
+                quantScore += (trendDir * 20);
+                detectedSignals.push({ name: 'Strong Trend Power', impact: trendDir > 0 ? 'bullish' : 'bearish' });
             }
-
-            // 1b. Stochastic RSI Logic
-            if (currentStochRsi) {
-              if (currentStochRsi.stochRSI < 20) {
-                  quantScore += 20; detectedSignals.push({ name: 'StochRSI Oversold Rebound', impact: 'bullish' });
-              } else if (currentStochRsi.stochRSI > 80) {
-                  quantScore -= 20; detectedSignals.push({ name: 'StochRSI Overbought Pullback', impact: 'bearish' });
-              }
-            }
-
-            // Volume Analysis
-            if (volumes.length > 20) {
-                const avgVol = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-                volumeProfile = volumes[volumes.length - 1] / avgVol;
-                if (volumeProfile > 1.5) {
-                   quantScore += (currentClose > opens[opens.length - 1]) ? 10 : -10;
-                   detectedSignals.push({ name: 'High Volume Confirmation', impact: currentClose > opens[opens.length - 1] ? 'bullish' : 'bearish' });
-                }
-            }
-
-            // Indicator Logic Routing (Weighted)
-            if (currentRsi < 30) { quantScore += 25; detectedSignals.push({ name: 'RSI Deep Oversold', impact: 'bullish' }); }
-            else if (currentRsi > 70) { quantScore -= 25; detectedSignals.push({ name: 'RSI Extreme Overbought', impact: 'bearish' }); }
-
-            if (currentStoch && currentStoch.k < 20 && currentStoch.k > currentStoch.d) { quantScore += 15; detectedSignals.push({ name: 'Stochastic Bullish Hook', impact: 'bullish'}); }
-            else if (currentStoch && currentStoch.k > 80 && currentStoch.k < currentStoch.d) { quantScore -= 15; detectedSignals.push({ name: 'Stochastic Bearish Crossover', impact: 'bearish'}); }
-
-            if (currentMacd && typeof currentMacd.MACD === 'number' && typeof currentMacd.signal === 'number') {
-                const macdGap = currentMacd.MACD - currentMacd.signal;
-                if (macdGap > 0) { quantScore += 15; }
-                else { quantScore -= 15; }
-                const prevMacd = macd[macd.length - 2];
-                if (prevMacd && typeof prevMacd.MACD === 'number' && typeof prevMacd.signal === 'number') {
-                    if (Math.abs(macdGap) > Math.abs(prevMacd.MACD - prevMacd.signal)) {
-                        quantScore += (macdGap > 0) ? 5 : -5;
-                    }
-                }
-            }
-
-            if (currentBB && currentClose <= currentBB.lower) { quantScore += 20; detectedSignals.push({ name: 'Volatility Band Support', impact: 'bullish'}); }
-            else if (currentBB && currentClose >= currentBB.upper) { quantScore -= 20; detectedSignals.push({ name: 'Volatility Band Resistance', impact: 'bearish'}); }
-
-            // Moving Average Crossovers (High weight)
-            const ma20 = calculateSMA(closes, 20);
-            const ma50 = calculateSMA(closes, 50);
-            if (ma20[ma20.length - 1] > ma50[ma50.length - 1] && ma20[ma20.length - 2] <= ma50[ma50.length - 2]) {
-                quantScore += 40; detectedSignals.push({ name: 'Golden Cross (Trend Alert)', impact: 'bullish'});
-            } else if (ma20[ma20.length - 1] < ma50[ma50.length - 1] && ma20[ma20.length - 2] >= ma50[ma50.length - 2]) {
-                quantScore -= 40; detectedSignals.push({ name: 'Death Cross (Trend Alert)', impact: 'bearish'});
-            }
-
-             // Candlestick Pattern Extraction
-             const last5Data = { open: opens.slice(-5), high: highs.slice(-5), low: lows.slice(-5), close: closes.slice(-5) };
-             if (bullishengulfingpattern(last5Data)) { quantScore += 25; detectedSignals.push({ name: 'Bullish Engulfing', impact: 'bullish'}); }
-             if (bearishengulfingpattern(last5Data)) { quantScore -= 25; detectedSignals.push({ name: 'Bearish Engulfing', impact: 'bearish'}); }
-             if (morningstar(last5Data)) { quantScore += 30; detectedSignals.push({ name: 'Morning Star Reversal', impact: 'bullish'}); }
-             if (eveningstar(last5Data)) { quantScore -= 30; detectedSignals.push({ name: 'Evening Star Reversal', impact: 'bearish'}); }
-             if (threeblackcrows(last5Data)) { quantScore -= 40; detectedSignals.push({ name: 'Three Black Crows', impact: 'bearish'}); }
-             if (threewhitesoldiers(last5Data)) { quantScore += 40; detectedSignals.push({ name: 'Three White Soldiers', impact: 'bullish'}); }
-
-             // Volatility Squeeze Detection
-             if (currentBB) {
-                 const bandwidth = (currentBB.upper - currentBB.lower) / currentBB.middle;
-                 if (bandwidth < 0.03) {
-                     detectedSignals.push({ name: 'Volatility Squeeze (Breakout Incoming)', impact: 'neutral' });
-                     quantScore += 5; 
-                 }
-             }
-
-             // ADX Trend Strength weight
-             if (currentAdx && currentAdx.adx > 25) {
-                 const trendDir = closes[closes.length - 1] > closes[closes.length - 20] ? 1 : -1;
-                 quantScore += (trendDir * 10);
-                 detectedSignals.push({ name: `Strong ${trendDir > 0 ? 'Bullish' : 'Bearish'} Trend (ADX)`, impact: trendDir > 0 ? 'bullish' : 'bearish' });
-             }
-            
-        } catch (quantErr) {
-            console.error("Quant Analytics Error:", quantErr);
-        }
-
-        // 2. Sentiment Integration (Drift Bias)
-        let sentimentBias = 0;
-        try {
-            const newsRes = await yahooFinance.search(symbol, { newsCount: 5 });
-            const news = newsRes.news || [];
-            // Simple keyword-based sentiment for internal scoring if AI isn't called yet
-            const keywords = { pos: ['up', 'growth', 'buy', 'gain', 'positive', 'profit'], neg: ['down', 'fall', 'sell', 'loss', 'negative', 'crash'] };
-            news.forEach(n => {
-                const tit = n.title.toLowerCase();
-                keywords.pos.forEach(w => { if(tit.includes(w)) sentimentBias += 5; });
-                keywords.neg.forEach(w => { if(tit.includes(w)) sentimentBias -= 5; });
-            });
         } catch(e) {}
 
-        // Keep quant score bounded tightly
-        quantScore = Math.max(-100, Math.min(100, quantScore + (sentimentBias * 2)));
-        const trendModifier = (quantScore / 100); 
+        // Instead of calculating a global minPrice/maxPrice which corrupts data when mixing synthetic regimes 
+        // with real assets, we'll normalize each 30-day window independently
+        const maxVol = Math.max(...mergedHistorical.map(d => d.volume || 1)) || 1;
+        const maxAtr = Math.max(...atrFull) || 1;
 
-        // 3. Ensemble AR-I-MA-Prophet Hybrid Engine (60-Day Horizon)
-        const recentData = rawData.slice(-120).filter(d => d.close != null);
-        const prices = recentData.map(d => d.close);
+        const WINDOW_SIZE = 45;
+        const FORECAST_DAYS = 60;
         
-        // Integrated (I) - Differencing via Log Returns
-        const logReturns = [];
-        for(let i = 1; i < prices.length; i++){
-            logReturns.push(Math.log(prices[i] / prices[i-1]));
+        let model = tfModelCache.get(symbol);
+        if (!model) {
+            model = tf.sequential();
+            model.add(tf.layers.lstm({ units: 64, returnSequences: true, inputShape: [WINDOW_SIZE, 11] }));
+            model.add(tf.layers.dropout({ rate: 0.1 }));
+            model.add(tf.layers.lstm({ units: 32, returnSequences: false }));
+            model.add(tf.layers.leakyReLU({ alpha: 0.1 })); // Use LeakyReLU for hidden
+            model.add(tf.layers.dense({ units: FORECAST_DAYS, activation: 'linear' })); 
+            model.compile({ optimizer: tf.train.adam(0.001), loss: 'meanSquaredError' });
+            tfModelCache.set(symbol, model);
         }
 
-        // Dynamic Volatility Calculation (Recent Price Action)
-        const recentLogReturns = logReturns.slice(-30);
-        const logMean = recentLogReturns.reduce((a, b) => a + b, 0) / recentLogReturns.length || 0;
-        const logVariance = recentLogReturns.reduce((sq, n) => sq + Math.pow(n - logMean, 2), 0) / recentLogReturns.length || 0.0001;
-        const recentVolatility = Math.sqrt(logVariance);
+        const xs: number[][][] = [];
+        const ys: number[][] = [];
+        
+        for (let i = 0; i < enrichedData.length - WINDOW_SIZE - FORECAST_DAYS; i += 4) { // Faster training step
+            const windowSlice = enrichedData.slice(i, i + WINDOW_SIZE);
+            const targetSlice = enrichedData.slice(i + WINDOW_SIZE, i + WINDOW_SIZE + FORECAST_DAYS);
+            
+            // Per-window normalization
+            const windowCloses = windowSlice.map(d => d.close);
+            const windowMin = Math.min(...windowCloses);
+            const windowMax = Math.max(...windowCloses);
+            const windowRange = windowMax - windowMin || 1;
+            
+            const windowVols = windowSlice.map(d => d.volume || 1);
+            const windowMaxVol = Math.max(...windowVols) || 1;
+            
+            const windowAtrs = windowSlice.map(d => d.atr || 1);
+            const windowMaxAtr = Math.max(...windowAtrs) || 1;
 
-        // Seasonality (Daily/Prophet-like weekly estimation)
-        const dailyAverages = new Array(7).fill(0);
-        const dailyCounts = new Array(7).fill(0);
-        recentData.forEach((d, i) => {
-            if (i > 0) {
-                const day = new Date(d.date).getDay();
-                const ret = Math.log(d.close / recentData[i-1].close);
-                dailyAverages[day] += ret;
-                dailyCounts[day]++;
+            if (windowRange < 0.01 || windowSlice.length < WINDOW_SIZE) continue;
+
+            const window = windowSlice.map(d => [
+                (d.open - windowMin) / windowRange, 
+                (d.high - windowMin) / windowRange, 
+                (d.low - windowMin) / windowRange, 
+                (d.close - windowMin) / windowRange,
+                (d.volume || 0) / windowMaxVol, 
+                (d.rsi || 50) / 100, 
+                (d.macd || 0) + 0.5, 
+                d.bbPos || 0.5, 
+                (d.smaDist || 0) + 0.5, 
+                (d.atr || 0) / windowMaxAtr, 
+                (d.cci || 0) / 200 + 0.5
+            ]);
+            // Target is also normalized relative to the current window's span
+            const targetLine = targetSlice.map(d => (d.close - windowMin) / windowRange);
+            if (targetLine.length === FORECAST_DAYS) {
+                xs.push(window);
+                ys.push(targetLine);
             }
+        }
+
+        if (xs.length > 0) {
+            samplesCache.set(symbol, xs.length);
+            const tfXs = tf.tensor3d(xs);
+            const tfYs = tf.tensor2d(ys);
+            
+            const lastTrained = lastTrainedCache.get(symbol) || 0;
+            const now = Date.now();
+            // Force retrain if data size changed significantly or cache is old
+            if (now - lastTrained > 20 * 60 * 1000 && !isTrainingCache.get(symbol)) {
+                isTrainingCache.set(symbol, true);
+                try {
+                    const history = await model.fit(tfXs, tfYs, { 
+                        epochs: 15, batchSize: 32, validationSplit: 0.1, verbose: 0,
+                        callbacks: [
+                            tf.callbacks.earlyStopping({ monitor: 'val_loss', patience: 3 })
+                        ]
+                    });
+                    
+                    const finalLoss = history.history.loss[history.history.loss.length - 1];
+                    if(typeof finalLoss === 'number') {
+                        lastLossCache.set(symbol, Number(finalLoss.toFixed(4)));
+                    }
+
+                    lastTrainedCache.set(symbol, now);
+                } catch (trainErr) {
+                    console.error("Training failed:", trainErr);
+                } finally {
+                    isTrainingCache.set(symbol, false);
+                }
+            }
+            tfXs.dispose();
+            tfYs.dispose();
+        }
+
+        // Single pass prediction using real historical data (not synthetic)
+        // We always use the actual historical stock data for the final prediction inference
+        const realEnrichedData = enrichedData.slice(0, filteredData.length);
+        if (realEnrichedData.length < WINDOW_SIZE) {
+            return res.json({ 
+                error: `Not enough historical data for ${symbol}. Need at least ${WINDOW_SIZE} days.`,
+                localAiMetrics: { lastTrained: 0, samples: 0, loss: 0 } 
+            });
+        }
+        const lastWindowSlice = realEnrichedData.slice(-WINDOW_SIZE);
+        
+        const realCloses = lastWindowSlice.map(d => d.close);
+        const inferenceMin = Math.min(...realCloses);
+        const inferenceMax = Math.max(...realCloses);
+        const inferenceRange = inferenceMax - inferenceMin || 1;
+        
+        const realVols = lastWindowSlice.map(d => d.volume || 1);
+        const infMaxVol = Math.max(...realVols) || 1;
+        
+        const realAtrs = lastWindowSlice.map(d => d.atr || 1);
+        const infMaxAtr = Math.max(...realAtrs) || 1;
+
+        const lastWindow = lastWindowSlice.map(d => [
+            (d.open - inferenceMin) / inferenceRange, 
+            (d.high - inferenceMin) / inferenceRange, 
+            (d.low - inferenceMin) / inferenceRange, 
+            (d.close - inferenceMin) / inferenceRange,
+            (d.volume || 0) / infMaxVol, 
+            (d.rsi || 50) / 100, 
+            (d.macd || 0) + 0.5, 
+            d.bbPos || 0.5, 
+            (d.smaDist || 0) + 0.5, 
+            (d.atr || 0) / infMaxAtr, 
+            (d.cci || 0) / 200 + 0.5
+        ]);
+        
+        const inputTensor = tf.tensor3d([lastWindow]);
+        const predictionRaw = (model.predict(inputTensor) as tf.Tensor).dataSync();
+        inputTensor.dispose();
+
+        const lastDate = new Date(filteredData[filteredData.length - 1].date);
+        const futurePoints: any[] = [];
+        
+        const finalQuantScore = isNaN(quantScore) ? 0 : quantScore;
+        const trendMod = (finalQuantScore / 1500); // Very mild bias
+        
+        // Base volatility for confidence bands. 
+        // ATR is already represented in absolute value points here, so do NOT multiply by lastPrice.
+        const lastPrice = realEnrichedData[realEnrichedData.length - 1].close || 1;
+        const lastATR = realEnrichedData[realEnrichedData.length - 1].atr || (lastPrice * 0.015);
+        const baseVolatility = lastATR;  
+        
+        const normalizedPreds = Array.from(predictionRaw);
+        
+        // Calculate the anchor-shift to ensure the generated projection spline starts 
+        // organically right off of the newest candle's closing price
+        const clampedFirst = Math.max(-1.0, Math.min(3.0, normalizedPreds[0]));
+        const initialRawPrice = (clampedFirst * inferenceRange) + inferenceMin;
+        const lineShift = lastPrice - initialRawPrice;
+
+        // Force a zero-day anchor explicitly into the frontend mapping so Recharts 
+        // strictly draws the sequence physically attached to the close 
+        futurePoints.push({
+            date: new Date(lastDate).toISOString(),
+            predicted: lastPrice,
+            upperBand: lastPrice,
+            lowerBand: lastPrice,
+            confidence: 100
         });
-        const weekdayExpectancy = dailyAverages.map((val, i) => dailyCounts[i] > 0 ? val / dailyCounts[i] : 0);
 
-        // Holt-Winters level/trend
-        let level = prices[0];
-        let trend = prices[1] - prices[0];
-        const alpha = 0.25, beta = 0.15; 
-        for(let i = 1; i < prices.length; i++) {
-            const lastLevel = level;
-            level = alpha * prices[i] + (1 - alpha) * (level + trend);
-            trend = beta * (level - lastLevel) + (1 - beta) * trend;
-        }
-
-        const dataForRegression = recentData.map((d, i) => [i, d.close]);
-        const regression = linearRegression(dataForRegression);
-        const lastDate = new Date(recentData[recentData.length - 1].date);
-        
-        // 4. Advanced Ensemble Meta-Learner (Elastic Softmax + Market Correlation)
-        let marketVolatility = 0.015;
-        let marketCorrelation = 0.5;
-        try {
-            const p1 = new Date();
-            p1.setMonth(p1.getMonth() - 3);
-            const marketData = await yahooFinance.chart('^NSEI', { interval: '1d', period1: p1.toISOString() });
-            const mQuotes = marketData.quotes.filter((q: any) => q.close != null);
-            if (mQuotes.length > 20) {
-                const mReturns = [];
-                const sReturns = [];
-                const lookback = Math.min(mQuotes.length, prices.length) - 1;
-                
-                for(let j = 1; j <= 30 && j <= lookback; j++) {
-                    const sPrev = prices[prices.length - 1 - j];
-                    const sCurr = prices[prices.length - j];
-                    const mPrev = mQuotes[mQuotes.length - 1 - j].close;
-                    const mCurr = mQuotes[mQuotes.length - j].close;
-                    sReturns.push(Math.log(sCurr / sPrev));
-                    mReturns.push(Math.log(mCurr / mPrev));
-                }
-
-                // Market Volatility
-                const mMean = mReturns.reduce((a, b) => a + b, 0) / mReturns.length;
-                const mVar = mReturns.reduce((sq, n) => sq + Math.pow(n - mMean, 2), 0) / mReturns.length;
-                marketVolatility = Math.sqrt(mVar);
-
-                // Correlation
-                const sMean = sReturns.reduce((a, b) => a + b, 0) / sReturns.length;
-                let num = 0, denS = 0, denM = 0;
-                for(let k = 0; k < sReturns.length; k++) {
-                    const ds = sReturns[k] - sMean;
-                    const dm = mReturns[k] - mMean;
-                    num += ds * dm;
-                    denS += ds * ds;
-                    denM += dm * dm;
-                }
-                marketCorrelation = Math.abs(num / Math.sqrt(denS * denM)) || 0.5;
-            }
-        } catch(e) { console.warn("Correlation fetch failed:", e); }
-
-        // Evaluate sub-models over backtest window (Time-Decayed Weights)
-        let trendError = 0;
-        let meanRevError = 0;
-        let totalDecayWeight = 0;
-        const testWindow = 15;
-        for (let i = 0; i < testWindow; i++) {
-            const idx = prices.length - testWindow + i;
-            const actual = prices[idx];
-            
-            // Linear decay: more recent observations have higher weight
-            const decay = (i + 1) / testWindow; 
-            
-            const tPred = level + (trend * (idx - (prices.length - 1)));
-            const mPred = regression.b + (regression.m * idx);
-            
-            trendError += (Math.abs(actual - tPred) / actual) * decay;
-            meanRevError += (Math.abs(actual - mPred) / actual) * decay;
-            totalDecayWeight += decay;
-        }
-        
-        // Normalize errors by total decay weight
-        const normTrendError = trendError / totalDecayWeight;
-        const normMeanRevError = meanRevError / totalDecayWeight;
-        
-        // Elastic Softmax Weighting
-        const temp = 0.04; // Slightly lower temp for sharper penalization
-        const eTrend = Math.exp(-normTrendError / temp);
-        const eMean = Math.exp(-normMeanRevError / temp);
-        let finalTrendWeight = eTrend / (eTrend + eMean);
-        let finalMeanRevWeight = eMean / (eTrend + eMean);
-
-        // 4b. Regime Modulation (ADX + CCI influence)
-        // ADX determines "TrendingNESS", CCI determines "Cyclical Momentum"
-        if (currentAdx && currentAdx.adx > 30) {
-            finalTrendWeight = Math.min(0.9, finalTrendWeight * 1.5);
-            finalMeanRevWeight = 1 - finalTrendWeight;
-        } else if (currentAdx && currentAdx.adx < 18 && Math.abs(currentCci) < 100) {
-            finalMeanRevWeight = Math.min(0.9, finalMeanRevWeight * 1.5);
-            finalTrendWeight = 1 - finalMeanRevWeight;
-        }
-
-        let predictedClose = recentData[recentData.length - 1].close;
-        const bbBandwidth = currentBB ? (currentBB.upper - currentBB.lower) / currentBB.middle : 0.05;
-        
-        // 5. Volatility Scaling (Market-Beta Adjusted)
-        // volatility is idiosyncratic + (systemic * correlation)
-        const systemicRisk = marketVolatility * marketCorrelation;
-        const idiosyncraticRisk = recentVolatility * (1 - marketCorrelation);
-        const combinedVolatility = (idiosyncraticRisk * 0.7) + (systemicRisk * 0.3) + (bbBandwidth * 0.05); 
-        const volatilityScaler = Math.max(0.008, combinedVolatility);
-        const regimeBias = quantScore / 100;
-
-        const futurePoints = [];
-        const initialClose = recentData[recentData.length - 1].close;
-        const historicalMean = prices.reduce((a, b) => a + b, 0) / prices.length;
-        
-        for (let i = 1; i <= 60; i++) {
+        let validPredictionCount = 0;
+        normalizedPreds.forEach((val, i) => {
             const fDate = new Date(lastDate);
-            fDate.setDate(fDate.getDate() + i);
-            const dayOfWeek = fDate.getDay();
-            
-            // 1. Ensemble Consensus Drift with Horizon Damping (Adaptive)
-            // Learnings: Volatile assets (MAPE > 20%) need faster trend decay.
-            // Stable assets (MAPE < 3%) can maintain structural trends longer.
-            const volatilityPenalty = Math.max(0, (volatilityScaler - 0.01) * 5); 
-            const adaptiveDampingBase = Math.min(0.98, 0.97 - volatilityPenalty);
-            const horizonDamping = Math.pow(adaptiveDampingBase, i);
-            
-            // Adjust drift weight by market correlation
-            const driftStrength = 0.35 + (marketCorrelation * 0.15); // Higher correlation -> more weight on structural trend
-            const structuralDrift = (trend / predictedClose) * driftStrength * finalTrendWeight * horizonDamping;
-            
-            // 2. Adaptive Mean Reversion (Gravity Anchor)
-            // Pulls harder if predicted price deviates significantly from historical mean or regression target
-            const regTarget = (regression.b + regression.m * (recentData.length - 1 + i));
-            const deviationFromAnchor = (regTarget - predictedClose) / predictedClose;
-            
-            // Adaptive gravity: pulls harder for low-volatility stocks to keep them within bounds
-            const gravityStrength = 0.05 + (Math.max(0, 0.03 - volatilityScaler) * 2);
-            const gravityPull = (historicalMean - predictedClose) / predictedClose * gravityStrength * (i / 60);
-            const meanReversionForce = (deviationFromAnchor * 0.2 + gravityPull) * finalMeanRevWeight;
-            
-            // 3. Seasonality & Regime Damping
-            const seasonalDrift = weekdayExpectancy[dayOfWeek] * 0.3 * horizonDamping;
-            const biasDecay = Math.exp(-i / (15 + (1 - marketCorrelation) * 10)); // Decays faster for low correlation assets
-            const biasForce = regimeBias * 0.012 * biasDecay;
-            
-            // 4. Entropy / Volatility Expansion (Log-Normal capped)
-            const stochRsiHeat = currentStochRsi ? (currentStochRsi.stochRSI / 100) : 0.5;
-            const variance = volatilityScaler * (1 + (stochRsiHeat * 0.25)) * Math.sqrt(i) * 0.09;
+            // Move forward by actual days, skipping weekends doesn't correspond to exactly +i days 
+            // but we approximate by just skipping over Saturdays/Sundays
+            let addedDays = 0;
+            while(validPredictionCount <= i) {
+                addedDays++;
+                fDate.setDate(new Date(lastDate).getDate() + addedDays);
+                if (fDate.getDay() !== 0 && fDate.getDay() !== 6) {
+                    validPredictionCount++;
+                }
+            }
 
-            // 5. Net Drift Calculation with Saturation
-            const alignmentBonus = (Math.sign(structuralDrift) === Math.sign(biasForce)) ? 1.15 : 0.85;
-            const netDrift = (structuralDrift + meanReversionForce + biasForce + seasonalDrift) * alignmentBonus;
+            const clamped = Math.max(-1.0, Math.min(3.0, val));
+            let pPrice = (clamped * inferenceRange) + inferenceMin + lineShift;
+            pPrice *= (1 + (trendMod * (i + 1))); // Drift
             
-            // Sigmoidal capping of daily drift (preventing > 4% daily absolute moves from deterministic drift)
-            const saturatedDrift = Math.tanh(netDrift * 20) / 20; 
-            const noise = (Math.random() - 0.5) * variance;
+            const maxDeviation = lastPrice * 0.30;
+            pPrice = Math.max(
+                lastPrice - maxDeviation,
+                Math.min(lastPrice + maxDeviation, pPrice)
+            );
             
-            // Final Change with Global Bounds (Absolute daily limit of 5.5%)
-            const totalChange = Math.max(-0.055, Math.min(0.055, saturatedDrift + noise));
-            
-            // 6. Cumulative Saturation (Heuristic to prevent "moon" or "zero" scenarios)
-            // If the total cumulative gain/loss exceeds 25%, start applying strong counter-pressure
-            const cumulativeReturn = (predictedClose * (1 + totalChange)) / initialClose - 1;
-            const saturationPressure = Math.abs(cumulativeReturn) > 0.25 ? -Math.sign(cumulativeReturn) * (Math.abs(cumulativeReturn) - 0.25) * 0.5 : 0;
-            
-            predictedClose = predictedClose * (1 + totalChange + saturationPressure);
+            const uncertainty = baseVolatility * Math.sqrt(i + 1) * 1.5;
 
             futurePoints.push({
                 date: fDate.toISOString(),
-                predictedClose: parseFloat(predictedClose.toFixed(2)),
-                uncertaintyHigh: parseFloat((predictedClose * (1 + (variance * 2.0))).toFixed(2)),
-                uncertaintyLow: parseFloat((predictedClose * (1 - (variance * 2.0))).toFixed(2))
+                predicted: Math.round(pPrice * 100) / 100,
+                upperBand: Math.round((pPrice + uncertainty) * 100) / 100,
+                lowerBand: Math.round((pPrice - uncertainty) * 100) / 100,
+                confidence: Math.max(0, Math.round((1 - (i / 60) * 0.7) * 100)),
             });
-        }
+        });
 
-        // Pass data back to frontend for client-side AI analysis
-        const dataSampleForAI = recentData.slice(-45).filter((d: any) => d.open != null && d.close != null).map((d: any) => ({
-            date: d.date.toISOString().split("T")[0],
-            open: (d.open || 0).toFixed(2),
-            high: (d.high || 0).toFixed(2),
-            low: (d.low || 0).toFixed(2),
-            close: (d.close || 0).toFixed(2),
-            volume: d.volume || 0
-        }));
+        const memInfo = process.memoryUsage();
+        const tfMem = tf.memory();
 
         res.json({
             futurePoints,
-            trendGradient: regression.m,
-            dataSampleForAI, // Pass the formatted structure seamlessly downwards
-            quantSignals: {
-               score: quantScore,
-               signals: detectedSignals
+            quantSignals: { score: finalQuantScore, signals: detectedSignals },
+            localAiMetrics: { 
+                loss: lastLossCache.get(symbol) || 0,
+                epochs: 15,
+                samples: samplesCache.get(symbol) || 0, 
+                memoryMB: Math.round(memInfo.heapUsed / 1024 / 1024),
+                tfTensors: tfMem.numTensors,
+                lastTrained: lastTrainedCache.get(symbol) || 0,
+                syntheticRatio: Math.round((syntheticData.length / enrichedData.length) * 100)
             }
         });
     } catch(err: any) {
-        console.error("Prediction Error:", err);
+        console.error("ML Error:", err);
         res.status(500).json({ error: err.message });
     }
   });
@@ -575,22 +632,37 @@ async function startServer() {
       });
 
     } catch (error: any) {
-      console.error(error);
-      res.status(500).json({ error: error.message });
+      console.error("News Fetch Error:", error.message);
+      // Suppress "No data" / "delisted" errors for news to keep dashboard clean
+      res.json({ news: [], error: error.message.includes('No data') ? undefined : error.message });
     }
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !process.env.ELECTRON) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Production / Electron configuration
+    // In Electron process.resourcesPath is where packaged assets live
+    let distPath = path.join(process.cwd(), 'dist');
+    
+    if (process.env.ELECTRON === 'true') {
+        const electronDist = path.join(process.resourcesPath, 'app', 'dist');
+        if (fs.existsSync(electronDist)) {
+            distPath = electronDist;
+        }
+    }
+
+    console.log(`Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) {
+          return next();
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

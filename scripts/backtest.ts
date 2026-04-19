@@ -9,7 +9,10 @@ export async function runBacktest(symbol: string) {
     try {
         const p1 = new Date();
         p1.setMonth(p1.getMonth() - 13);
-        const data: any = await yahooFinance.chart(symbol, { interval: '1d', period1: p1.toISOString() });
+        const data: any = await yahooFinance.chart(symbol, { 
+            interval: '1d', 
+            period1: Math.floor(p1.getTime() / 1000) 
+        } as any);
         const quotes = data.quotes.filter((q: any) => q.close != null);
         
         if (quotes.length < 100) return null;
