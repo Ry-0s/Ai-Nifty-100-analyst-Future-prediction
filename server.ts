@@ -24,9 +24,10 @@ try {
     
     // In packaged Electron, paths are relative to resourcesPath
     if (process.env.ELECTRON === 'true') {
+        const resPath = process.env.RESOURCES_PATH || '';
         const potentialPaths = [
-            path.join(process.resourcesPath, 'synthetic_training_data.json'),
-            path.join(process.resourcesPath, 'app', 'synthetic_training_data.json')
+            path.join(resPath, 'synthetic_training_data.json'),
+            path.join(resPath, 'app', 'synthetic_training_data.json')
         ];
         for (const p of potentialPaths) {
             if (fs.existsSync(p)) {
@@ -669,7 +670,8 @@ async function startServer() {
     let distPath = path.join(process.cwd(), 'dist');
     
     if (process.env.ELECTRON === 'true') {
-        const electronDist = path.join(process.resourcesPath, 'app', 'dist');
+        const resPath = process.env.RESOURCES_PATH || '';
+        const electronDist = path.join(resPath, 'app', 'dist');
         if (fs.existsSync(electronDist)) {
             distPath = electronDist;
         }

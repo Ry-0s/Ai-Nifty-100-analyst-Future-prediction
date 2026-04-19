@@ -42,6 +42,7 @@ function startBackendServer() {
       PORT: SERVER_PORT,
       NODE_ENV: 'production',
       ELECTRON: 'true',
+      RESOURCES_PATH: process.resourcesPath,
     };
 
     if (isDev) {
