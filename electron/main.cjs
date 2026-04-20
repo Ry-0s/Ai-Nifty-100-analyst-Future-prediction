@@ -68,7 +68,13 @@ function startBackendServer() {
     serverProcess = utilityProcess.fork(serverPath, [], {
       env,
       stdio: 'pipe',
-      cwd: app.getAppPath(),
+      cwd: isDev ? process.cwd() : app.getAppPath(),
+    });
+
+    serverProcess.on('spawn', () => {
+      console.log('Backend process spawned successfully.');
+      // Short delay to give it time to bind to port
+      setTimeout(resolve, 2000);
     });
 
     serverProcess.stdout.on('data', (data) => {
@@ -82,10 +88,13 @@ function startBackendServer() {
     serverProcess.stderr.on('data', (data) => {
       const errOutput = data.toString();
       console.error('[Server Error]', errOutput);
-      // Even if there's an error (like a warning), if it's already listening we resolve
       if (errOutput.includes('Server running') || errOutput.includes('listening')) {
         resolve();
       }
+    });
+
+    serverProcess.on('exit', (code) => {
+      console.log('Backend process exited with code:', code);
     });
 
     serverProcess.on('error', (err) => {
@@ -93,8 +102,8 @@ function startBackendServer() {
       reject(err);
     });
 
-    // Timeout fallback
-    setTimeout(resolve, 15000);
+    // Timeout fallback (longer than the spawn resolve)
+    setTimeout(resolve, 10000);
   });
 }
 

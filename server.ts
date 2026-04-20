@@ -665,6 +665,16 @@ async function startServer() {
     }
   });
 
+  // 404 handler for API routes
+  app.all('/api/*', (req, res) => {
+    console.warn(`[Backend] 404 on API route: ${req.method} ${req.path}`);
+    res.status(404).json({ 
+        error: "API endpoint not found",
+        method: req.method,
+        path: req.path
+    });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production' && !process.env.ELECTRON) {
     const vite = await createViteServer({
@@ -674,33 +684,33 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Production / Electron configuration
-    let distPath = path.join(process.cwd(), 'dist');
+    let distPath = '';
     
     if (process.env.ELECTRON === 'true') {
-        const resPath = process.env.RESOURCES_PATH || '';
-        // Handle asar.unpacked folder if it exists
-        let unpackedPath = resPath;
-        if (resPath.endsWith('.asar')) {
-            unpackedPath = resPath + '.unpacked';
-        }
+        const appPath = process.cwd(); // cwd is usually appPath in utilityProcess
+        
+        // Try paths relative to the current script first
+        const potentialDistPaths = [
+            path.join(__dirname, '..', 'dist'), // Relative to dist/server.cjs
+            path.join(__dirname, 'dist'),
+            path.join(appPath, 'dist'),
+            path.join(appPath, 'app', 'dist'),
+            path.join(process.cwd(), 'dist')
+        ];
 
-        // If we are already in the dist folder, distPath is just cwd
-        if (process.cwd().includes('dist')) {
-            distPath = process.cwd();
-        } else {
-            const potentialDistPaths = [
-                path.join(unpackedPath, 'app', 'dist'),
-                path.join(unpackedPath, 'dist'),
-                path.join(process.cwd(), 'dist')
-            ];
-
-            for (const p of potentialDistPaths) {
-                if (fs.existsSync(path.join(p, 'index.html'))) {
-                    distPath = p;
-                    break;
-                }
+        for (const p of potentialDistPaths) {
+            if (fs.existsSync(path.join(p, 'index.html'))) {
+                distPath = p;
+                break;
             }
         }
+        
+        if (!distPath) {
+             console.error("[Backend] CRITICAL: Could not locate frontend 'dist' directory.");
+             distPath = path.join(process.cwd(), 'dist'); // Fallback
+        }
+    } else {
+        distPath = path.join(process.cwd(), 'dist');
     }
 
     console.log(`[Backend] Serving UI from: ${distPath}`);
@@ -719,15 +729,15 @@ async function startServer() {
     });
   }
 
+  console.log(`[Backend] Attempting to listen on port ${PORT}...`);
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`[Backend] SUCCESS: Server running on http://localhost:${PORT}`);
   });
 
   server.on('error', (e: any) => {
+    console.error('[Backend] FAILED to start server:', e);
     if (e.code === 'EADDRINUSE') {
-      console.error(`Port ${PORT} is already in use. Please close other applications.`);
-    } else {
-      console.error('Server error:', e);
+      console.error(`[Backend] Port ${PORT} is already in use.`);
     }
   });
 }

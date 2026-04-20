@@ -328,11 +328,7 @@ export default function Dashboard() {
     isUpdatingRef.current = true; // Signal that we are performing an auto-update
     try {
       const histUrl = `/api/history/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`;
-      const hRes = await fetch(histUrl);
-      
-      if (!hRes.ok) throw new Error(`Historical data fetch failed: ${hRes.status}`);
-      
-      const hDataRaw = await hRes.json();
+      const hDataRaw = await fetchSafe(histUrl);
 
       const chartData = hDataRaw.map((d: any) => ({
         date: d.date, 
@@ -366,8 +362,7 @@ export default function Dashboard() {
       // Fetch predictions in background
       const predictUrl = `/api/ml/predict/${encodeURIComponent(symbol)}`;
       try {
-        const pRes = await fetch(predictUrl);
-        const pDataRaw = pRes.ok ? await pRes.json() : { error: `AI service unavailable (${pRes.status})` };
+        const pDataRaw = await fetchSafe(predictUrl);
         
         if (pDataRaw.error && !pDataRaw.futurePoints) {
             console.warn("Prediction Error:", pDataRaw.error);
