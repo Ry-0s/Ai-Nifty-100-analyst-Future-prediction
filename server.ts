@@ -685,17 +685,18 @@ async function startServer() {
   } else {
     // Production / Electron configuration
     let distPath = '';
+    const isElectron = process.env.ELECTRON === 'true';
     
-    if (process.env.ELECTRON === 'true') {
-        const appPath = process.cwd(); // cwd is usually appPath in utilityProcess
+    if (isElectron) {
+        // utilityProcess.fork sets cwd to appPath or specified path
+        const appPath = process.cwd();
         
-        // Try paths relative to the current script first
         const potentialDistPaths = [
-            path.join(__dirname, '..', 'dist'), // Relative to dist/server.cjs
-            path.join(__dirname, 'dist'),
             path.join(appPath, 'dist'),
             path.join(appPath, 'app', 'dist'),
-            path.join(process.cwd(), 'dist')
+            path.join(__dirname, '..', 'dist'), // Relative to dist/server.cjs in some versions
+            path.join(__dirname, 'dist'),
+            path.join(process.resourcesPath, 'app', 'dist')
         ];
 
         for (const p of potentialDistPaths) {
@@ -704,17 +705,17 @@ async function startServer() {
                 break;
             }
         }
-        
-        if (!distPath) {
-             console.error("[Backend] CRITICAL: Could not locate frontend 'dist' directory.");
-             distPath = path.join(process.cwd(), 'dist'); // Fallback
-        }
-    } else {
+    }
+
+    if (!distPath) {
         distPath = path.join(process.cwd(), 'dist');
     }
 
-    console.log(`[Backend] Serving UI from: ${distPath}`);
+    console.log(`[Backend] Resolved UI Path: ${distPath}`);
     app.use(express.static(distPath));
+    
+    // Health check for Electron
+    app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '1.2.0' }));
     
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api')) {
