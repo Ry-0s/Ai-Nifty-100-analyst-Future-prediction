@@ -3,7 +3,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import YahooFinance from 'yahoo-finance2';
 import { linearRegression } from 'simple-statistics';
-import * as tf from '@tensorflow/tfjs-node';
+import * as tf from '@tensorflow/tfjs';
 import fs from 'fs';
 import { 
   RSI, MACD, SMA, StochasticRSI, BollingerBands, ADX, ATR, CCI, IchimokuCloud,

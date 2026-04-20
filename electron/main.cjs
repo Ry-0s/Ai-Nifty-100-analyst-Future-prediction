@@ -119,8 +119,12 @@ function createWindow() {
   // Load the app
   const loadURL = () => {
     mainWindow.loadURL(`http://localhost:${SERVER_PORT}`).catch(err => {
-      console.error('Initial load failed, will retry in 2s...', err);
-      setTimeout(loadURL, 2000);
+      console.error('Initial load failed, will retry in 3s...', err);
+      // Inject a readable error onto the black screen so the user isn't guessing
+      mainWindow.webContents.executeJavaScript(`
+        document.body.innerHTML = "<div style='display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;color:white;font-family:sans-serif;background:#0f0f14;'><h2 style='color:#ef4444;'>Backend Server Not Reachable</h2><p style='color:#a1a1aa;'>The Express server failed to start or is still booting.</p><p style='color:#a1a1aa;'>Retrying connection...</p></div>";
+      `).catch(() => {});
+      setTimeout(loadURL, 3000);
     });
   };
 
