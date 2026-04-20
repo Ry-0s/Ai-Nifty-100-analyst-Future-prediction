@@ -116,7 +116,7 @@ function createWindow() {
     minHeight: 700,
     title: 'NIFTY 100 AI Predictor',
     backgroundColor: '#0f0f14',
-    show: false,
+    show: false, // Start hidden, we show it via ready-to-show or error fallback
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -130,12 +130,14 @@ function createWindow() {
     if (!mainWindow) return; 
 
     mainWindow.loadURL(`http://127.0.0.1:${SERVER_PORT}`).catch(err => {
-      console.error('Initial load failed, will retry in 3s...', err);
+      console.error('Initial load failed, will retry in 5s...', err);
       
-      // CRITICAL: Force the window to show immediately so the user isn't stuck with an invisible RAM-eating process
+      // CRITICAL: Force the window to show if it was waiting for the server
       if (mainWindow && !mainWindow.isVisible()) {
           mainWindow.show();
       }
+
+      const escapedError = (err.message || 'Unknown Connection Error').replace(/[`\\"']/g, '');
 
       mainWindow?.webContents?.executeJavaScript(`
         document.body.innerHTML = \`
@@ -145,16 +147,24 @@ function createWindow() {
             </div>
             <h2 style='color:#ef4444;margin:0 0 8px 0;font-size:24px;'>Backend Server Not Reachable</h2>
             <p style='color:#a1a1aa;margin:0 0 24px 0;max-width:400px;line-height:1.5;'>
-              The AI Prediction Engine (Local Server) is taking longer than expected to start. This happens during first run or if a firewall is blocking the connection.
+              The AI Prediction Engine is taking longer than expected to start. This is often caused by high CPU usage or firewall settings.
             </p>
             <div style='display:flex;gap:12px;'>
                 <button onclick='window.location.reload()' style='background:#ef4444;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:bold;cursor:pointer;transition:transform 0.1s active;'>
                    Retry Now
                 </button>
-                <button onclick='alert("Diagnostics:\\nPort: ${SERVER_PORT}\\nHost: 127.0.0.1\\nError: " + JSON.stringify(${JSON.stringify(err.message)}))' style='background:#27272a;color:#a1a1aa;border:none;padding:10px 24px;border-radius:8px;font-weight:bold;cursor:pointer;'>
+                <button onclick='document.getElementById("debug-box").style.display="block"' style='background:#27272a;color:#a1a1aa;border:none;padding:10px 24px;border-radius:8px;font-weight:bold;cursor:pointer;'>
                    See Info
                 </button>
             </div>
+            
+            <div id='debug-box' style='display:none;margin-top:20px;padding:12px;background:#18181b;border:1px solid #27272a;border-radius:8px;font-family:monospace;font-size:12px;color:#71717a;text-align:left;max-width:500px;overflow-wrap:break-word;'>
+                <strong>Diagnostics:</strong><br/>
+                Port: ${SERVER_PORT} | Host: 127.0.0.1<br/>
+                Error: ${escapedError}<br/><br/>
+                <em>Note: If you are seeing "ECONNREFUSED", the backend process is failing to bind to port 3388.</em>
+            </div>
+
             <p style='margin-top:24px;font-size:11px;color:#3f3f46;font-family:monospace;'>Retrying automatically in 5 seconds...</p>
             <style>
               @keyframes spin { to { transform: rotate(360deg); } }
@@ -164,7 +174,6 @@ function createWindow() {
         \`;
       `).catch(() => {});
       
-      // Safely loop
       setTimeout(() => {
         if (mainWindow) loadURL();
       }, 5000);
@@ -230,6 +239,9 @@ function createWindow() {
 app.whenReady().then(async () => {
   createSplashScreen();
 
+  // Create the window immediately so we aren't waiting on a black screen
+  createWindow();
+
   // Diagnostic shortcut to open DevTools in production
   globalShortcut.register('CommandOrControl+Shift+I', () => {
     if (mainWindow) {
@@ -237,13 +249,9 @@ app.whenReady().then(async () => {
     }
   });
   
-  try {
-    await startBackendServer();
-  } catch (err) {
+  startBackendServer().catch(err => {
     console.error('Failed to bootstrap backend:', err);
-  }
-
-  createWindow();
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
