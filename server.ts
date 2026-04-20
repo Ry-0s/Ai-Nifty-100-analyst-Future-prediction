@@ -731,8 +731,8 @@ async function startServer() {
   }
 
   console.log(`[Backend] Attempting to listen on port ${PORT}...`);
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Backend] SUCCESS: Server running on http://localhost:${PORT}`);
+  const server = app.listen(PORT, '127.0.0.1', () => {
+    console.log(`[Backend] SUCCESS: Server running on http://127.0.0.1:${PORT}`);
   });
 
   server.on('error', (e: any) => {

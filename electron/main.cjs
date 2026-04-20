@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, utilityProcess } = require('electron');
+const { app, BrowserWindow, shell, dialog, utilityProcess, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -9,7 +9,7 @@ let mainWindow;
 let splash;
 let serverProcess;
 
-const SERVER_PORT = 3000; // Match the current Express server's port
+const SERVER_PORT = 3388; // Unique port for the app to avoid conflicts
 
 function createSplashScreen() {
   splash = new BrowserWindow({
@@ -129,7 +129,7 @@ function createWindow() {
     // CRITICAL: Prevent crash if the app is closed while the timeout is running
     if (!mainWindow) return; 
 
-    mainWindow.loadURL(`http://localhost:${SERVER_PORT}`).catch(err => {
+    mainWindow.loadURL(`http://127.0.0.1:${SERVER_PORT}`).catch(err => {
       console.error('Initial load failed, will retry in 3s...', err);
       
       // CRITICAL: Force the window to show immediately so the user isn't stuck with an invisible RAM-eating process
@@ -138,13 +138,36 @@ function createWindow() {
       }
 
       mainWindow?.webContents?.executeJavaScript(`
-        document.body.innerHTML = "<div style='display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;color:white;font-family:sans-serif;background:#0f0f14;'><h2 style='color:#ef4444;'>Backend Server Not Reachable</h2><p style='color:#a1a1aa;'>The Express server failed to start or is still booting.</p><p style='color:#a1a1aa;'>Retrying connection...</p></div>";
+        document.body.innerHTML = \`
+          <div style='display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;color:white;font-family:sans-serif;background:#0f0f14;text-align:center;padding:20px;'>
+            <div style='width:64px;height:64px;border:3px solid #ef4444;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-bottom:24px;border-top-color:transparent;animation:spin 1s linear infinite;'>
+               <span style='font-size:24px;font-weight:bold;'>!</span>
+            </div>
+            <h2 style='color:#ef4444;margin:0 0 8px 0;font-size:24px;'>Backend Server Not Reachable</h2>
+            <p style='color:#a1a1aa;margin:0 0 24px 0;max-width:400px;line-height:1.5;'>
+              The AI Prediction Engine (Local Server) is taking longer than expected to start. This happens during first run or if a firewall is blocking the connection.
+            </p>
+            <div style='display:flex;gap:12px;'>
+                <button onclick='window.location.reload()' style='background:#ef4444;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:bold;cursor:pointer;transition:transform 0.1s active;'>
+                   Retry Now
+                </button>
+                <button onclick='alert("Diagnostics:\\nPort: ${SERVER_PORT}\\nHost: 127.0.0.1\\nError: " + JSON.stringify(${JSON.stringify(err.message)}))' style='background:#27272a;color:#a1a1aa;border:none;padding:10px 24px;border-radius:8px;font-weight:bold;cursor:pointer;'>
+                   See Info
+                </button>
+            </div>
+            <p style='margin-top:24px;font-size:11px;color:#3f3f46;font-family:monospace;'>Retrying automatically in 5 seconds...</p>
+            <style>
+              @keyframes spin { to { transform: rotate(360deg); } }
+              button:active { transform: scale(0.96); }
+            </style>
+          </div>
+        \`;
       `).catch(() => {});
       
       // Safely loop
       setTimeout(() => {
         if (mainWindow) loadURL();
-      }, 3000);
+      }, 5000);
     });
   };
 
@@ -206,6 +229,13 @@ function createWindow() {
 // ─── App Lifecycle ──────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   createSplashScreen();
+
+  // Diagnostic shortcut to open DevTools in production
+  globalShortcut.register('CommandOrControl+Shift+I', () => {
+    if (mainWindow) {
+        mainWindow.webContents.openDevTools();
+    }
+  });
   
   try {
     await startBackendServer();
@@ -218,6 +248,10 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {
