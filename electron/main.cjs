@@ -1,6 +1,5 @@
-const { app, BrowserWindow, shell, dialog } = require('electron');
+const { app, BrowserWindow, shell, dialog, utilityProcess } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
 const fs = require('fs');
 
 // Determine if we're in development or production (packaged)
@@ -66,9 +65,9 @@ function startBackendServer() {
     }
 
     // In production, spawn the compiled server
-    serverProcess = spawn(process.execPath, [serverPath], {
+    serverProcess = utilityProcess.fork(serverPath, [], {
       env,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       cwd: app.getAppPath(),
     });
 
@@ -118,13 +117,25 @@ function createWindow() {
 
   // Load the app
   const loadURL = () => {
+    // CRITICAL: Prevent crash if the app is closed while the timeout is running
+    if (!mainWindow) return; 
+
     mainWindow.loadURL(`http://localhost:${SERVER_PORT}`).catch(err => {
       console.error('Initial load failed, will retry in 3s...', err);
-      // Inject a readable error onto the black screen so the user isn't guessing
-      mainWindow.webContents.executeJavaScript(`
+      
+      // CRITICAL: Force the window to show immediately so the user isn't stuck with an invisible RAM-eating process
+      if (mainWindow && !mainWindow.isVisible()) {
+          mainWindow.show();
+      }
+
+      mainWindow?.webContents?.executeJavaScript(`
         document.body.innerHTML = "<div style='display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;color:white;font-family:sans-serif;background:#0f0f14;'><h2 style='color:#ef4444;'>Backend Server Not Reachable</h2><p style='color:#a1a1aa;'>The Express server failed to start or is still booting.</p><p style='color:#a1a1aa;'>Retrying connection...</p></div>";
       `).catch(() => {});
-      setTimeout(loadURL, 3000);
+      
+      // Safely loop
+      setTimeout(() => {
+        if (mainWindow) loadURL();
+      }, 3000);
     });
   };
 
@@ -202,7 +213,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (serverProcess) {
-    serverProcess.kill('SIGTERM');
+    serverProcess.kill();
   }
   if (process.platform !== 'darwin') {
     app.quit();
@@ -211,6 +222,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   if (serverProcess) {
-    serverProcess.kill('SIGTERM');
+    serverProcess.kill();
   }
 });

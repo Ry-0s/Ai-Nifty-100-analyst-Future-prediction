@@ -67,7 +67,7 @@
       "dist/**/*",
       "synthetic_training_data.json"
     ],
-    "asar": false,
+    "asar": true,
     "extraResources": [
       {
         "from": "synthetic_training_data.json",
